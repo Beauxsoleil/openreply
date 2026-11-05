@@ -1,0 +1,8 @@
+# Local Codespaces-only mail capture; no Meta credentials needed for UI development.
+services:
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "127.0.0.1:1025:1025"
+      - "8025:8025"
+    restart: unless-stopped
