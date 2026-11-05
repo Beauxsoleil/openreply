@@ -1,0 +1,30 @@
+{
+  "name": "OpenReply Codespaces",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+  "forwardPorts": [
+    3000,
+    8025
+  ],
+  "portsAttributes": {
+    "3000": {
+      "label": "OpenReply dashboard",
+      "onAutoForward": "openBrowser"
+    },
+    "8025": {
+      "label": "Local email inbox",
+      "onAutoForward": "notify"
+    }
+  },
+  "postCreateCommand": "bash scripts/codespaces-setup.sh",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "Prisma.prisma",
+        "ms-azuretools.vscode-docker"
+      ]
+    }
+  }
+}
