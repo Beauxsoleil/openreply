@@ -95,6 +95,14 @@ Two processes, always. `npm run dev` serves the app and receives webhooks. `npm 
 
 Full environment variables and the production layout are in [docs/setup.md](docs/setup.md).
 
+## Deploying
+
+- **Docker Compose (plain Docker, single server):** [docs/deploy-docker.md](docs/deploy-docker.md) — web + worker + cron + Postgres + Redis from `docker-compose.prod.yml`, with a `.env.production` file, TLS/reverse-proxy guidance, and backup/recovery.
+- **Dokploy:** [docs/deploy-dokploy.md](docs/deploy-dokploy.md) — two Applications (web + worker) plus Postgres/Redis services on your own Dokploy server.
+- **Vercel + Railway:** [docs/setup.md](docs/setup.md) — the recommended managed path, web app on Vercel and worker plus databases on Railway.
+
+Whichever path you pick, the instance needs a public HTTPS URL, PostgreSQL, Redis, a running worker, and email delivery for magic-link sign-in — and the web app and worker must share the same `DATABASE_URL`, `REDIS_URL`, and `ENCRYPTION_KEY`.
+
 ## Set it up with your AI assistant
 
 If you use Claude Code, Cursor, or a similar tool, an assistant can walk you through either connection path. There is a ready-made prompt in the [Set it up with an AI assistant](docs/setup.md#set-it-up-with-an-ai-assistant) section of the setup guide. Paste it into your assistant inside a clone of this repo, choose your provider before configuring any Meta secrets, and it will walk you through connecting Instagram and going live.
