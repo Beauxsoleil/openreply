@@ -7,6 +7,9 @@ import {
   recordFollowerSnapshot,
 } from "@/lib/reports/follower-history";
 
+// Vercel Hobby defaults functions to 10 s; give the cron the 60 s ceiling.
+export const maxDuration = 60;
+
 /**
  * Records one follower total per connected account per day.
  *

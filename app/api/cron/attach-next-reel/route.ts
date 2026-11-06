@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { attachPendingNextReels } from "@/lib/automation/attach-next-reel";
 
+// Vercel Hobby defaults functions to 10 s; give the cron the 60 s ceiling.
+export const maxDuration = 60;
+
 /**
  * Binds "next reel" campaigns to a real post.
  *
