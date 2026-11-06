@@ -31,7 +31,7 @@ The web app and the worker must share the same `DATABASE_URL`, the same `REDIS_U
 - **Direct Meta only:** a Facebook account for Meta developer registration. Zernio users skip the own-app setup.
 - An Instagram Business or Creator account. A personal account cannot be connected. Switch it in the Instagram app under Settings, Account type, if needed.
 - A [Resend](https://resend.com) account for login emails, with a verified sender domain. Login is email magic links only, so without this nobody can sign in. If you already run your own mail server, you can point `EMAIL_SERVER` at it instead and skip Resend entirely — see the [environment variables](#environment-variables) table.
-- Somewhere to host. The recommended setup, used throughout this guide, is Vercel for the web app and Railway for the worker plus Postgres and Redis. Check hosting costs for your usage; the always-on worker needs a suitable service plan.
+- Somewhere to host. The recommended setup, used throughout this guide, is the free split stack: Vercel for the web app, Neon for Postgres, Upstash for Redis, and Render for the worker. The full walkthrough is [docs/deploy-split-stack.md](deploy-split-stack.md); the Railway path is no longer the recommended one. Check hosting costs for your usage; the always-on worker needs a suitable service plan.
 
 ## Hosting and your domain
 
@@ -40,41 +40,33 @@ You do not need to buy a domain. Deploying the web app to Vercel gives you a fre
 Recommended split:
 
 - Web app: Vercel. You get `your-app.vercel.app` for free on deploy.
-- Worker, Postgres, Redis: Railway.
+- Postgres: Neon (free tier).
+- Redis: Upstash (free tier).
+- Worker: Render background worker (free tier).
 
-Do Railway first, because Vercel needs the database URLs from it.
+Do Neon and Upstash first, because Vercel needs the database URLs from them. Full step-by-step for all four services is [docs/deploy-split-stack.md](deploy-split-stack.md).
 
-### Step 1: Railway (Postgres, Redis, worker)
+### Step 1: Neon (Postgres), Upstash (Redis), Render (worker)
 
-1. Create a Railway account and a New Project.
-2. In the project, click New, then Database, then Add PostgreSQL.
-3. Click New, then Database, then Add Redis.
-4. Add the worker: click New, then GitHub Repo, and select your fork of this repo. Railway detects the Node app.
-5. Open the worker service's Settings and set the Build Command and Start Command:
+1. Create a Neon project (free tier) and copy its connection strings: the pooled `DATABASE_URL` for the running app, and the direct `DIRECT_URL` for migrations.
+2. Create an Upstash Redis database (free tier) and copy its TLS `REDIS_URL` (`rediss://...`). BullMQ needs a TCP Redis connection that supports blocking commands, so an HTTP-only Redis will not work.
+3. Add the worker on Render: New, then Background Worker, then your fork of this repo. Render detects the Node app.
+4. In the worker service's Settings set the Build Command and Start Command:
    ```
    Build Command:  npm run db:generate
    Start Command:  npm run worker
    ```
-   The worker only needs the generated Prisma client, not `next build`. Do not leave the build as the default `npm run build`: it runs `next build` needlessly, and any build step that reaches the database (like `prisma migrate deploy`) fails here, because the worker cannot connect to Postgres at build time. Migrations are applied by the web app's `vercel-build` (Step 3) and by the manual `db:migrate` below, never by the worker.
-6. Open the worker service's Variables and add the shared environment variables and any variables required by your chosen provider from the [table below](#environment-variables). For the worker, use Railway's internal database and Redis hostnames (they look like `postgres.railway.internal` and `redis.railway.internal`); inside Railway's network they are faster and free of egress. `NEXTAUTH_URL` is your Vercel domain. `ENCRYPTION_KEY` must be the exact same value you will use on Vercel.
+   The worker only needs the generated Prisma client, not `next build`. Do not leave the build as the default `npm run build`: it runs `next build` needlessly, and any build step that reaches the database (like `prisma migrate deploy`) fails here, because the worker cannot connect to Postgres at build time. Migrations are applied manually with `DIRECT_URL` (Step 2), never by the worker and never by the web app's build.
+5. Open the worker service's Environment and add the shared environment variables and any variables required by your chosen provider from the [table below](#environment-variables). Use the pooled Neon `DATABASE_URL` and the Upstash `REDIS_URL`. `NEXTAUTH_URL` is your Vercel domain. `ENCRYPTION_KEY` must be the exact same value you will use on Vercel.
 
-Getting the connection URLs. Open the Postgres service, then its Variables or Connect tab. You will see two URLs:
-
-| Variable | Host | Use it for |
-| --- | --- | --- |
-| `DATABASE_URL` | `postgres.railway.internal` | the Railway worker only |
-| `DATABASE_PUBLIC_URL` | `*.proxy.rlwy.net` | Vercel, and running migrations from your machine |
-
-Redis is the same: `REDIS_URL` (internal) for the worker, `REDIS_PUBLIC_URL` (public proxy) for Vercel.
-
-Vercel runs outside Railway's private network, so if you give Vercel an internal `*.railway.internal` URL it will hang and time out. Always give Vercel the public URLs.
+Getting the connection URLs: Neon shows a pooled URL and a direct URL for the same database — use the pooled one for the app and worker, the direct one only for migrations. Upstash shows one TLS URL; use it everywhere Redis is needed.
 
 ### Step 2: Migrate the production database
 
-Run once from your machine, using the public Postgres URL:
+Run once from your machine, using Neon's direct URL (migrations cannot run through the pooled endpoint):
 
 ```bash
-DATABASE_URL="postgresql://...proxy.rlwy.net.../railway" npm run db:migrate
+DIRECT_URL="postgresql://...@ep-...neon.tech.../neondb" npm run db:migrate
 ```
 
 ### Step 3: Vercel (web app, and your domain)
@@ -82,18 +74,18 @@ DATABASE_URL="postgresql://...proxy.rlwy.net.../railway" npm run db:migrate
 1. Create a Vercel account and Add New Project, importing your fork. It auto-detects Next.js.
 2. Under the project's Settings, then Environment Variables, add the shared environment variables and your provider’s variables from the [table below](#environment-variables). Use these values:
    - `NEXTAUTH_URL`: your Vercel domain, for example `https://your-app.vercel.app`. This is the free domain Vercel assigns on deploy.
-   - `DATABASE_URL` and `REDIS_URL`: the public Railway URLs (`DATABASE_PUBLIC_URL` and `REDIS_PUBLIC_URL` from Railway).
+   - `DATABASE_URL` and `REDIS_URL`: the pooled Neon URL and the Upstash TLS URL from Step 1.
    - `ENCRYPTION_KEY`: the exact same value as on the worker.
 3. Deploy. The build runs `prisma generate` before `next build`, so the Prisma client is generated even though it is gitignored.
 4. The daily token-refresh cron is wired up in `vercel.json`.
 
-Note on crons: Vercel's free plan allows each cron to run at most once per day. The repo's crons are set to daily for that reason. The comment polling reconciler does not use a Vercel cron; it runs inside the Railway worker on its own interval, so the free plan is not a constraint there.
+Note on crons: Vercel's free plan allows each cron to run at most once per day. The repo's crons are set to daily for that reason. The comment polling reconciler does not use a Vercel cron; it runs inside the Render worker on its own interval, so the free plan is not a constraint there.
 
 Optional custom domain: if you want `openreply.yoursite.com` instead of the Vercel URL, add it in Vercel under Domains and make it primary. Then update `NEXTAUTH_URL` and the two Meta URLs (Step 7 and Step 8 below) to the new domain, and update the worker's `NEXTAUTH_URL` too, or tracked links in DMs will point at the old domain.
 
 ## Environment variables
 
-Copy `.env.example` to `.env` for local work, or set these in Vercel and Railway for hosting. Zernio credentials are saved in Settings, not environment variables. The Meta variables in the second table are only for direct Meta connections.
+Copy `.env.example` to `.env` for local work, or set these in Vercel and Render for hosting. Zernio credentials are saved in Settings, not environment variables. The Meta variables in the second table are only for direct Meta connections.
 
 | Variable | What it is |
 | --- | --- |
@@ -101,7 +93,7 @@ Copy `.env.example` to `.env` for local work, or set these in Vercel and Railway
 | `NEXTAUTH_SECRET` | Random secret. `openssl rand -base64 32` |
 | `CRON_SECRET` | Random secret protecting the token-refresh cron. |
 | `ENCRYPTION_KEY` | 32-byte hex. `openssl rand -hex 32`. Encrypts provider credentials and Instagram tokens. Identical across web and worker. |
-| `DATABASE_URL` | PostgreSQL connection string. Public Railway URL on Vercel; internal on the worker. |
+| `DATABASE_URL` | PostgreSQL connection string. Neon's pooled URL on Vercel and the worker; the direct URL (`DIRECT_URL`) is only for migrations. |
 | `REDIS_URL` | Redis connection string. Must support blocking commands, so an HTTP-only Redis will not work with BullMQ. |
 | `RESEND_API_KEY` | Resend key. Login is email magic links only, so without this nobody can sign in. |
 | `EMAIL_FROM` | A sender on a domain you verified in Resend. The placeholder will not deliver. |
@@ -331,8 +323,7 @@ Work through this order. Ask for decisions or actions only I can supply:
    direct Meta is still supported. Explain the feature limits in docs/zernio.md.
    Ask which provider I want. Do not silently migrate existing accounts.
 
-2. Choose local or hosted. For hosting, the guide uses Vercel for the web app
-   and Railway for the worker, PostgreSQL, and Redis. For local, use Docker
+2. Choose local or hosted. For hosting, the guide uses Vercel for the web app, Neon for PostgreSQL, Upstash for Redis, and Render for the worker. For local, use Docker
    Compose and a public HTTPS tunnel. Explain infrastructure costs separately.
 
 3. Configure shared services and secrets. Set up PostgreSQL, Redis, login email
