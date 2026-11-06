@@ -55,6 +55,10 @@ import { TRACKED_LINK_ORDER } from "@/lib/tracking/link-order";
 import { hashRecipientId } from "@/lib/tracking/server";
 
 import { ZernioApiError } from "@/lib/zernio/client";
+import {
+  assertNotDemoSend,
+  DEMO_REFUSAL_MESSAGE,
+} from "@/lib/demo";
 
 const BACKOFF_DELAYS = [5 * 60 * 1000, 15 * 60 * 1000, 45 * 60 * 1000];
 
@@ -332,6 +336,39 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
         );
 
     if (!matchResult.matched) {
+      continue;
+    }
+
+    // Demo-mode guard: a demo account (or any account while DEMO_MODE=1)
+    // must never send a real DM. Refuse loudly and record the refusal so
+    // it is visible in Logs instead of silently vanishing.
+    try {
+      assertNotDemoSend(automation.instagramAccount);
+    } catch {
+      await prisma.dmLog.upsert({
+        where: {
+          automationId_commentId: {
+            automationId: automation.id,
+            commentId,
+          },
+        },
+        create: {
+          workspaceId: automation.workspaceId,
+          automationId: automation.id,
+          instagramAccountId: automation.instagramAccountId,
+          commenterId,
+          commenterName,
+          commentText,
+          commentId,
+          matchedKeyword: matchResult.matchedKeyword,
+          status: "FAILED",
+          errorMessage: DEMO_REFUSAL_MESSAGE,
+        },
+        update: {
+          status: "FAILED",
+          errorMessage: DEMO_REFUSAL_MESSAGE,
+        },
+      });
       continue;
     }
 
@@ -918,6 +955,14 @@ async function processPostback(job: Job<ProcessPostbackJob>): Promise<void> {
     return;
   }
 
+  // Demo-mode guard: never send a real DM for a demo account (or while
+  // DEMO_MODE=1). The refusal is logged by assertNotDemoSend.
+  try {
+    assertNotDemoSend(automation.instagramAccount);
+  } catch {
+    return;
+  }
+
   // Duplicate sends are enabled: every button tap re-sends the reveal
   // instead of only firing once per person.
   const dedupeId = `reveal:${userId}`;
@@ -1241,6 +1286,14 @@ async function processFollowUp(job: Job<ProcessFollowUpJob>): Promise<void> {
     return;
   }
 
+  // Demo-mode guard: never send a real DM for a demo account (or while
+  // DEMO_MODE=1). The refusal is logged by assertNotDemoSend.
+  try {
+    assertNotDemoSend(automation.instagramAccount);
+  } catch {
+    return;
+  }
+
   let accessToken: InstagramContext;
   try {
     accessToken = await createInstagramContext(
@@ -1310,6 +1363,14 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
         );
 
     if (!matchResult.matched) continue;
+
+    // Demo-mode guard: never send a real DM for a demo account (or while
+    // DEMO_MODE=1). The refusal is logged by assertNotDemoSend.
+    try {
+      assertNotDemoSend(automation.instagramAccount);
+    } catch {
+      continue;
+    }
 
     const existingLog = await prisma.dmLog.findUnique({
       where: {

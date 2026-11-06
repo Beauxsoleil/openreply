@@ -6,6 +6,26 @@ import {
   ZernioDeliveryUnconfirmedError,
 } from "@/lib/zernio/client";
 import type { InstagramContext, ZernioContext } from "./context";
+import {
+  DEMO_REFUSAL_MESSAGE,
+  DEMO_TOKEN_PLACEHOLDER,
+} from "@/lib/demo";
+
+/**
+ * Last line of defence at the send layer: a Meta context built from a demo
+ * account's placeholder token must never reach the Meta API. (In practice
+ * `createInstagramContext` fails to decrypt the placeholder first; this
+ * catches any path that builds a context without going through it.)
+ */
+function assertSendContextAllowed(context: InstagramContext): void {
+  if (
+    context.provider === "META" &&
+    context.accessToken === DEMO_TOKEN_PLACEHOLDER
+  ) {
+    console.error(`[Demo Mode] ${DEMO_REFUSAL_MESSAGE}`);
+    throw new Error(DEMO_REFUSAL_MESSAGE);
+  }
+}
 
 type Button =
   | { type: "url"; title: string; url: string }
@@ -86,6 +106,7 @@ export async function sendPrivateReply({
   message: string;
   postId?: string;
 }) {
+  assertSendContextAllowed(context);
   if (context.provider === "META")
     return meta.sendPrivateReply(
       context.accessToken,
@@ -113,6 +134,7 @@ export async function sendPrivateReplyWithButton({
   payload: string;
   postId?: string;
 }) {
+  assertSendContextAllowed(context);
   if (context.provider === "META")
     return meta.sendPrivateReplyWithButton(
       context.accessToken,
@@ -146,6 +168,7 @@ export async function sendDirectMessageWithButton({
   buttonTitle: string;
   payload: string;
 }) {
+  assertSendContextAllowed(context);
   if (context.provider === "META")
     return meta.sendDirectMessageWithButton(
       context.accessToken,
@@ -178,6 +201,7 @@ export async function sendPrivateReplyWithLinkButton({
   buttons: meta.LinkButton[];
   postId?: string;
 }) {
+  assertSendContextAllowed(context);
   if (context.provider === "META")
     return meta.sendPrivateReplyWithLinkButton(
       context.accessToken,
@@ -206,6 +230,7 @@ export async function sendDirectMessage({
   userId: string;
   message: string;
 }) {
+  assertSendContextAllowed(context);
   if (context.provider === "META")
     return meta.sendDirectMessage(
       context.accessToken,
@@ -229,6 +254,7 @@ export async function sendDirectMessageWithLinkButton({
   text: string;
   buttons: meta.LinkButton[];
 }) {
+  assertSendContextAllowed(context);
   if (context.provider === "META")
     return meta.sendDirectMessageWithLinkButton(
       context.accessToken,
@@ -256,6 +282,7 @@ export async function sendCommentReply({
   message: string;
   postId?: string;
 }) {
+  assertSendContextAllowed(context);
   if (context.provider === "META")
     return meta.sendCommentReply(context.accessToken, commentId, message);
   const result = await zernioRequest<{ data: { commentId: string } }>({

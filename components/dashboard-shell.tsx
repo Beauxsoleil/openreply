@@ -9,6 +9,7 @@ interface DashboardShellProps {
   workspaceName: string;
   instagramUsername: string | null;
   instagramAccountCount: number;
+  isDemoMode?: boolean;
 }
 
 export default function DashboardShell({
@@ -16,6 +17,7 @@ export default function DashboardShell({
   workspaceName,
   instagramUsername,
   instagramAccountCount,
+  isDemoMode = false,
 }: DashboardShellProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -35,6 +37,19 @@ export default function DashboardShell({
           instagramUsername={instagramUsername}
           instagramAccountCount={instagramAccountCount}
         />
+
+        {/* Demo-mode banner: permanent and NOT dismissible. Everything in
+            demo mode is simulated; nothing here sends a real Instagram
+            message. */}
+        {isDemoMode && (
+          <div
+            role="status"
+            className="shrink-0 bg-amber-500 px-4 py-2 text-center text-sm font-semibold text-black"
+          >
+            Demo mode — simulated activity only, no real Instagram messages
+            are sent.
+          </div>
+        )}
 
         {/* overflow-x-hidden: enabling vertical scrolling makes the browser
             allow horizontal scrolling too, which lets a wide child drag the

@@ -7,6 +7,10 @@ import {
   MetaApiError,
 } from "@/lib/instagram/provider";
 import { createInstagramContext } from "@/lib/instagram/provider";
+import {
+  assertNotDemoSend,
+  DEMO_REFUSAL_MESSAGE,
+} from "@/lib/demo";
 
 export interface ConversationListItem {
   id: string;
@@ -139,6 +143,17 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       { success: false, error: "Instagram account not connected." },
       { status: 400 }
+    );
+  }
+
+  // Demo-mode guard: a demo account (or DEMO_MODE=1) never sends a real DM,
+  // including a hand-typed reply from the inbox.
+  try {
+    assertNotDemoSend(account);
+  } catch {
+    return NextResponse.json(
+      { success: false, error: DEMO_REFUSAL_MESSAGE },
+      { status: 403 }
     );
   }
 

@@ -51,6 +51,23 @@ export function getMetaGraphApiVersion(): string {
 }
 
 /**
+ * Local demo mode: a credential-free way to try the full comment -> DM loop
+ * without ever sending a real Instagram message. Enabled with
+ * `DEMO_MODE=1` (or `DEMO_MODE=true`) in `.env`. See `docs/demo.md`.
+ *
+ * Demo mode changes behaviour in exactly these places:
+ * - `POST /api/demo/simulate-comment` is active (404 otherwise);
+ * - the dashboard shows a permanent, non-dismissible demo banner;
+ * - the DM send path refuses demo accounts (see `lib/demo.ts`);
+ * - `prisma/seed-demo.ts` can create demo fixtures.
+ * It never relaxes authentication and never touches the Meta API.
+ */
+export function isDemoMode(): boolean {
+  const value = (process.env.DEMO_MODE ?? "").trim().toLowerCase();
+  return value === "1" || value === "true";
+}
+
+/**
  * The public demo, and the only host where sign-in is blocked. This repo is
  * something other people clone and deploy; a self-hoster's own domain must
  * never match this and must never be blocked from logging in — that's the

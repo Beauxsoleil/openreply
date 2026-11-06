@@ -152,6 +152,9 @@ model InstagramAccount {
   accessToken       String
   tokenExpiresAt    DateTime?
   webhookSubscribed Boolean  @default(false)
+  /// Demo-mode fixture account: carries no real credential (its token is
+  /// DEMO_NO_REAL_TOKEN) and must never send a real DM. See lib/demo.ts.
+  isDemo            Boolean  @default(false)
   connectedAt       DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -259,6 +262,11 @@ model DmLog {
   publicReplyDeliveryUnconfirmed Boolean @default(false)
   publicReplySentAt DateTime?
   publicReplyError  String?
+
+  /// True when this row was produced by demo-mode simulation
+  /// (POST /api/demo/simulate-comment), not by a real Instagram comment.
+  /// Simulated rows are never sent to Instagram. See docs/demo.md.
+  isDemo            Boolean  @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
