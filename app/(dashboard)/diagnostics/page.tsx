@@ -3,6 +3,7 @@
 import { useI18n } from "@/lib/i18n/provider";
 import { useEffect, useState } from "react";
 import StatusBadge from "@/components/status-badge";
+import ErrorState from "@/components/ui/error-state";
 
 interface DiagnosticsData {
   queueCounts: Record<string, number>;
@@ -80,28 +81,47 @@ export default function DiagnosticsPage() {
   const { t, label, locale } = useI18n();
   const [data, setData] = useState<DiagnosticsData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
 
   async function refreshDiagnostics() {
     setLoading(true);
-    const response = await fetch("/api/admin/diagnostics");
-    const payload = await response.json();
-    if (payload.success) {
-      setData(payload.data);
+    try {
+      const response = await fetch("/api/admin/diagnostics");
+      const payload = await response.json();
+      if (payload.success) {
+        setData(payload.data);
+        setLoadError(false);
+      } else {
+        setLoadError(true);
+      }
+    } catch (err) {
+      console.error("Failed to refresh diagnostics:", err);
+      setLoadError(true);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }
 
   useEffect(() => {
     let active = true;
 
     async function loadInitialDiagnostics() {
-      const response = await fetch("/api/admin/diagnostics");
-      const payload = await response.json();
-      if (active && payload.success) {
-        setData(payload.data);
-      }
-      if (active) {
-        setLoading(false);
+      try {
+        const response = await fetch("/api/admin/diagnostics");
+        const payload = await response.json();
+        if (active && payload.success) {
+          setData(payload.data);
+          setLoadError(false);
+        } else if (active) {
+          setLoadError(true);
+        }
+      } catch (err) {
+        console.error("Failed to load diagnostics:", err);
+        if (active) setLoadError(true);
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
       }
     }
 
@@ -114,6 +134,11 @@ export default function DiagnosticsPage() {
 
   if (loading && !data) {
     return <div className="panel rounded p-8 h-64" />;
+  }
+
+  // A failed fetch must not render as healthy-looking zeros.
+  if (loadError && !data) {
+    return <ErrorState onRetry={() => void refreshDiagnostics()} />;
   }
 
   const workerAgeSeconds =
@@ -139,6 +164,12 @@ export default function DiagnosticsPage() {
           {t("Refresh")}
         </button>
       </div>
+
+      {loadError && data && (
+        <div role="alert" className="rounded-lg border border-error/20 bg-error/10 p-3 text-sm text-error">
+          {t("Failed to load this page. Please try again.")}
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3">
         <div className="panel rounded p-4 sm:p-5">
