@@ -3,7 +3,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/db/client";
 import { getBaseUrl } from "@/lib/env";
 import { canConnectInstagramAccount } from "@/lib/instagram-accounts";
-import { getLongLivedToken, getUserInfo, subscribeInstagramAccountToWebhooks } from "@/lib/meta/client";
+import { getLongLivedToken, getUserInfo, isProfessionalInstagramAccount, subscribeInstagramAccountToWebhooks } from "@/lib/meta/client";
 import {
   encryptToken,
   exchangeCodeForToken,
@@ -50,6 +50,14 @@ export async function GET(request: NextRequest) {
     const { accessToken: longLivedToken, expiresIn } =
       await getLongLivedToken(shortLivedToken);
     const userInfo = await getUserInfo(longLivedToken);
+    // A personal account connects fine and only fails later at send time,
+    // with a Meta permission error. Reject it here, before any campaigns can
+    // be built against an account that can never send.
+    if (!isProfessionalInstagramAccount(userInfo)) {
+      return NextResponse.redirect(
+        `${baseUrl}/settings?instagram=personal_account`
+      );
+    }
     // Webhooks and the messaging API key off the professional account ID
     // (user_id), not the app-scoped `id`. Store user_id so comment webhooks
     // can be matched back to this account. Fall back to id if user_id is
