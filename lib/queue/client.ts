@@ -13,6 +13,7 @@ export function getRedisConnection(): Redis {
   if (!connection) {
     connection = new Redis(process.env.REDIS_URL!, {
       maxRetriesPerRequest: null, // Required by BullMQ
+      enableReadyCheck: false, // Recommended by BullMQ for worker (blocking) connections
     });
   }
   return connection;

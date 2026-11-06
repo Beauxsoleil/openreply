@@ -6,6 +6,10 @@ import {
 } from "@/lib/meta/webhook";
 import { processInstagramWebhook } from "@/lib/queue/process-webhook";
 
+// Vercel Hobby defaults functions to 10 s; the webhook does DB writes +
+// queue enqueues before responding, so give it the 60 s Hobby ceiling.
+export const maxDuration = 60;
+
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;

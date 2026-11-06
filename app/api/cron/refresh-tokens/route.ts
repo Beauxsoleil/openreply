@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db/client";
 import { refreshInstagramAccountToken } from "@/lib/meta/token-refresh";
 
+// Vercel Hobby defaults functions to 10 s; token refresh loops over accounts
+// calling the Meta Graph API, so give it the 60 s Hobby ceiling.
+export const maxDuration = 60;
+
 const DAYS_BEFORE_EXPIRY = 10;
 
 export async function GET(request: NextRequest) {
