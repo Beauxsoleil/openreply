@@ -6,6 +6,7 @@ import { Suspense, useEffect, useState } from "react";
 import type { AccountOption } from "@/components/account-select";
 import { ZernioConnection } from "@/components/zernio-connection";
 import { InstagramConnectNotice } from "@/components/instagram-connect-notice";
+import ErrorState from "@/components/ui/error-state";
 
 interface SettingsData {
   workspace: {
@@ -56,21 +57,41 @@ export default function SettingsPage() {
     null
   );
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<"ADMIN" | "MEMBER">("MEMBER");
   const [memberError, setMemberError] = useState<string | null>(null);
+  const [disconnectError, setDisconnectError] = useState<string | null>(null);
+
+  async function loadSettings() {
+    setLoading(true);
+    setLoadError(false);
+    try {
+      const [statsPayload, membersPayload] = await Promise.all([
+        fetch("/api/dashboard/stats").then((res) => res.json()),
+        fetch("/api/workspace/members").then((res) => res.json()),
+      ]);
+      if (statsPayload.success) setData(statsPayload.data);
+      if (membersPayload.success) setMembersData(membersPayload.data);
+      if (!statsPayload.success || !membersPayload.success) {
+        setLoadError(true);
+      }
+    } catch (err) {
+      console.error("Failed to load settings:", err);
+      setLoadError(true);
+    } finally {
+      setLoading(false);
+    }
+  }
 
   useEffect(() => {
-    Promise.all([
-      fetch("/api/dashboard/stats").then((res) => res.json()),
-      fetch("/api/workspace/members").then((res) => res.json()),
-    ])
-      .then(([statsPayload, membersPayload]) => {
-        if (statsPayload.success) setData(statsPayload.data);
-        if (membersPayload.success) setMembersData(membersPayload.data);
-      })
-      .finally(() => setLoading(false));
+    // Deferred a tick so the initial state write doesn't cascade-render;
+    // same convention as the campaigns/logs pages.
+    const timer = window.setTimeout(() => {
+      void loadSettings();
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   async function refreshMembers() {
@@ -85,12 +106,29 @@ export default function SettingsPage() {
     }
 
     setBusy(`disconnect:${instagramAccountId}`);
-    await fetch("/api/instagram/disconnect", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ instagramAccountId }),
-    });
-    window.location.reload();
+    setDisconnectError(null);
+    try {
+      const res = await fetch("/api/instagram/disconnect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ instagramAccountId }),
+      });
+      const payload = await res.json().catch(() => null);
+      // Only reload on a confirmed success — a failed disconnect used to
+      // look identical to a successful one.
+      if (res.ok && payload?.success !== false) {
+        window.location.reload();
+        return;
+      }
+      setDisconnectError(
+        payload?.error ?? t("Could not disconnect this account. Please try again.")
+      );
+    } catch (err) {
+      console.error("Failed to disconnect:", err);
+      setDisconnectError(t("Could not disconnect this account. Please try again."));
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function inviteMember(event: React.FormEvent) {
@@ -127,6 +165,11 @@ export default function SettingsPage() {
     return <div className="panel rounded p-8 h-64" />;
   }
 
+  // A failed load must not render as blank sections.
+  if (loadError && !data && !membersData) {
+    return <ErrorState onRetry={() => void loadSettings()} />;
+  }
+
   const accounts = data?.instagramAccounts ?? [];
   const canManageMembers =
     membersData?.currentUserRole === "OWNER" ||
@@ -140,6 +183,18 @@ export default function SettingsPage() {
       <Suspense fallback={null}>
         <InstagramConnectNotice />
       </Suspense>
+
+      {loadError && (
+        <div role="alert" className="rounded-lg border border-error/20 bg-error/10 p-3 text-sm text-error">
+          {t("Failed to load this page. Please try again.")}
+        </div>
+      )}
+
+      {disconnectError && (
+        <div role="alert" className="rounded-lg border border-error/20 bg-error/10 p-3 text-sm text-error">
+          {disconnectError}
+        </div>
+      )}
 
       <section className="panel rounded p-4 sm:p-6 space-y-3">
         <h2 className="text-base font-semibold">{t("Interface language")}</h2>
@@ -305,6 +360,7 @@ export default function SettingsPage() {
               value={inviteEmail}
               onChange={(event) => setInviteEmail(event.target.value)}
               placeholder="teammate@agency.com"
+              aria-label={t("Email address")}
               className="rounded border border-border bg-surface px-4 py-2 text-sm text-foreground outline-none transition-colors focus:border-accent/40"
               required
             />
@@ -313,6 +369,7 @@ export default function SettingsPage() {
               onChange={(event) =>
                 setInviteRole(event.target.value as "ADMIN" | "MEMBER")
               }
+              aria-label={t("Role")}
               className="rounded border border-border bg-surface px-3 py-2 text-sm text-foreground outline-none transition-colors focus:border-accent/40"
             >
               <option value="MEMBER">{t("Member")}</option>
