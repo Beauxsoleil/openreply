@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/db/client';
 import { getDMQueue, MESSAGE_JOB_NAME, POSTBACK_JOB_NAME } from '@/lib/queue/client';
+import { recordRecipientInteraction } from '@/lib/instagram/messaging-window';
 import { parseCommentEvents, parseMessageEvents, parsePostbackEvents, parseReadEvents } from '@/lib/meta/webhook';
 import { Prisma, type InstagramProvider } from '@/app/generated/prisma/client';
 
@@ -72,6 +73,14 @@ export async function processInstagramWebhook({ payload: incoming, provider, wor
     );
 
     for (const event of postbackEvents) {
+      const account = accountMap.get(event.instagramAccountId);
+      if (!account) continue;
+
+      // A button tap is a recipient interaction: it opens (or re-opens) the
+      // 24-hour messaging window. Record it before enqueueing so the worker's
+      // pre-send check sees it even if the job runs immediately.
+      await recordRecipientInteraction(account.id, event.userId);
+
       await queue.add(
         POSTBACK_JOB_NAME,
         {
@@ -99,6 +108,11 @@ export async function processInstagramWebhook({ payload: incoming, provider, wor
     for (const event of messageEvents) {
       const account = accountMap.get(event.instagramAccountId);
       if (!account) continue;
+
+      // An inbound DM is a recipient interaction: it opens (or re-opens) the
+      // 24-hour messaging window. Record it before enqueueing so the worker's
+      // pre-send check sees it even if the job runs immediately.
+      await recordRecipientInteraction(account.id, event.senderId);
 
       await queue.add(
         MESSAGE_JOB_NAME,

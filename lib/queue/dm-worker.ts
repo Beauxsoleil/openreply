@@ -40,7 +40,13 @@ import {
   type InstagramContext,
 } from "@/lib/instagram/provider";
 import { matchKeywords } from "@/lib/utils/keyword-matcher";
-import { reserveDMSlot, releaseDMSlot } from "@/lib/utils/rate-limiter";
+import {
+  reserveDMSlot,
+  releaseDMSlot,
+  type RateLimitResult,
+} from "@/lib/utils/rate-limiter";
+import { getMessagingWindowStatus } from "@/lib/instagram/messaging-window";
+import { refreshInstagramAccountToken } from "@/lib/meta/token-refresh";
 import {
   releaseWorkspaceDMReservation,
   reserveWorkspaceDMSend,
@@ -134,6 +140,90 @@ function isTemplateRejection(error: unknown): boolean {
   return error instanceof MetaApiError && error.code === 100 &&
     /template|button/i.test(error.message) &&
     !NON_TEMPLATE_REJECTIONS.some((pattern) => pattern.test(error.message));
+}
+
+/**
+ * Reserve one hourly DM slot for an account, or arrange the retry/skip when
+ * the account is over Meta's 750/hour private-reply cap (see
+ * lib/utils/rate-limiter.ts). The comment path does this inline; the
+ * postback, follow-up, and message paths share this helper so every DM send
+ * draws from the same per-account budget.
+ *
+ * Returns the reservation when a slot was taken — the caller releases it if
+ * the send then fails with a confirmed rejection — or null when the job was
+ * requeued or skipped and the caller should return without sending.
+ */
+async function acquireDMSlot(args: {
+  instagramAccountId: string;
+  requeueAttempt: number;
+  requeue: (delayMs: number) => Promise<unknown>;
+  onSkip: () => Promise<unknown>;
+}): Promise<RateLimitResult | null> {
+  const rateLimit = await reserveDMSlot(
+    args.instagramAccountId,
+    args.requeueAttempt
+  );
+  if (rateLimit.allowed) return rateLimit;
+  if (rateLimit.shouldRequeue) {
+    await args.requeue(rateLimit.requeueDelayMs);
+    return null;
+  }
+  await args.onSkip();
+  return null;
+}
+
+/**
+ * Send once; if Meta answers that the token expired, refresh the account's
+ * long-lived token inline and retry the send once with the fresh token.
+ * Zernio sends never refresh — a Zernio 401 stays a failure. If the refresh
+ * itself fails, the original TokenExpiredError is rethrown so the failure
+ * keeps its classification (a confirmed rejection, which releases the
+ * rate-limit slot and the workspace reservation instead of burning them on a
+ * retry that cannot succeed until the token is fixed).
+ */
+async function sendWithTokenRefresh<T>(args: {
+  account: {
+    id: string;
+    workspaceId: string;
+    provider: "META" | "ZERNIO";
+    accessToken: string;
+    username?: string | null;
+  };
+  context: InstagramContext;
+  send: (context: InstagramContext) => Promise<T>;
+}): Promise<T> {
+  try {
+    return await args.send(args.context);
+  } catch (error) {
+    if (!(error instanceof TokenExpiredError)) throw error;
+    if (args.account.provider !== "META" || args.context.provider !== "META")
+      throw error;
+    console.log(
+      `[DM Worker] Token expired for @${args.account.username ?? args.account.id}; refreshing and retrying once`
+    );
+    try {
+      const refreshed = await refreshInstagramAccountToken(args.account);
+      return await args.send({
+        provider: "META",
+        accessToken: refreshed.accessToken,
+      });
+    } catch (refreshError) {
+      await prisma.operationalEvent
+        .create({
+          data: {
+            workspaceId: args.account.workspaceId,
+            source: "TOKEN_REFRESH",
+            level: "ERROR",
+            message: `In-worker token refresh failed for @${args.account.username ?? args.account.id}: ${
+              refreshError instanceof Error ? refreshError.message : "Unknown error"
+            }`,
+            payload: { instagramAccountId: args.account.id },
+          },
+        })
+        .catch(() => {});
+      throw error;
+    }
+  }
 }
 
 type WorkerTrackedLink = {
@@ -466,11 +556,16 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
           commenterName,
           trackedLinks: automation.trackedLinks,
         });
-        await sendCommentReply({
+        await sendWithTokenRefresh({
+          account: automation.instagramAccount,
           context: accessToken,
-          commentId: commentId,
-          message: publicReply,
-          postId: mediaId,
+          send: (ctx) =>
+            sendCommentReply({
+              context: ctx,
+              commentId: commentId,
+              message: publicReply,
+              postId: mediaId,
+            }),
         });
         await prisma.dmLog.update({
           where: {
@@ -530,6 +625,10 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
       continue;
     }
 
+    // No 24-hour messaging-window check here: private replies to comments are
+    // exempt from it (Meta allows one per comment regardless of the window).
+    // The check lives on the paths that send DMs to a user id instead —
+    // postback, follow-up, and message trigger.
     const usage = await reserveWorkspaceDMSend(automation.workspaceId);
     if (!usage.allowed) {
       await prisma.dmLog.update({
@@ -670,16 +769,21 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
           commenterName,
           trackedLinks: [],
         });
-        await sendPrivateReplyWithButton({
+        await sendWithTokenRefresh({
+          account: automation.instagramAccount,
           context: accessToken,
-          instagramAccountId: automation.instagramAccount.instagramId,
-          commentId: commentId,
-          text: openingText,
-          buttonTitle: automation.openingDmButtonLabel as string,
-          // The ":open" marker tells a tap here apart from the follow prompt's
-          // own "I'm following" button, which sends the same prefix.
-          payload: `${automation.requireFollow ? "followcheck" : "reveal"}:${automation.id}:open`,
-          postId: mediaId,
+          send: (ctx) =>
+            sendPrivateReplyWithButton({
+              context: ctx,
+              instagramAccountId: automation.instagramAccount.instagramId,
+              commentId: commentId,
+              text: openingText,
+              buttonTitle: automation.openingDmButtonLabel as string,
+              // The ":open" marker tells a tap here apart from the follow prompt's
+              // own "I'm following" button, which sends the same prefix.
+              payload: `${automation.requireFollow ? "followcheck" : "reveal"}:${automation.id}:open`,
+              postId: mediaId,
+            }),
         });
       } else if (sendFollowPrompt) {
         const promptText = renderMessageWithoutLink({
@@ -688,14 +792,19 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
             "quick favor before i send your link. i don't make any money from this, it's free. if you want to support me, just don't unfollow after, and star the repo on github if it helps you. tap the button once you're following and i'll send it over",
           commenterName,
         });
-        await sendPrivateReplyWithButton({
+        await sendWithTokenRefresh({
+          account: automation.instagramAccount,
           context: accessToken,
-          instagramAccountId: automation.instagramAccount.instagramId,
-          commentId: commentId,
-          text: promptText,
-          buttonTitle: automation.followPromptButtonLabel || "i'm following",
-          payload: `followcheck:${automation.id}`,
-          postId: mediaId,
+          send: (ctx) =>
+            sendPrivateReplyWithButton({
+              context: ctx,
+              instagramAccountId: automation.instagramAccount.instagramId,
+              commentId: commentId,
+              text: promptText,
+              buttonTitle: automation.followPromptButtonLabel || "i'm following",
+              payload: `followcheck:${automation.id}`,
+              postId: mediaId,
+            }),
         });
       } else if (automation.trackedLinks.length > 0) {
         // Try button template first; if Meta rejects it, fall back to inline links.
@@ -711,13 +820,18 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
         );
 
         try {
-          await sendPrivateReplyWithLinkButton({
+          await sendWithTokenRefresh({
+            account: automation.instagramAccount,
             context: accessToken,
-            instagramAccountId: automation.instagramAccount.instagramId,
-            commentId: commentId,
-            text: bodyText,
-            buttons: buttons,
-            postId: mediaId,
+            send: (ctx) =>
+              sendPrivateReplyWithLinkButton({
+                context: ctx,
+                instagramAccountId: automation.instagramAccount.instagramId,
+                commentId: commentId,
+                text: bodyText,
+                buttons: buttons,
+                postId: mediaId,
+              }),
           });
         } catch (buttonError) {
           // Only a template rejection is worth retrying as text. Anything else
@@ -737,12 +851,17 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
             hashRecipientId(commenterId)
           );
           try {
-            await sendPrivateReply({
+            await sendWithTokenRefresh({
+              account: automation.instagramAccount,
               context: accessToken,
-              instagramAccountId: automation.instagramAccount.instagramId,
-              commentId: commentId,
-              message: fallbackMessage,
-              postId: mediaId,
+              send: (ctx) =>
+                sendPrivateReply({
+                  context: ctx,
+                  instagramAccountId: automation.instagramAccount.instagramId,
+                  commentId: commentId,
+                  message: fallbackMessage,
+                  postId: mediaId,
+                }),
             });
           } catch (fallbackError) {
             throw classifySendError(fallbackError);
@@ -755,12 +874,17 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
           trackedLinks: automation.trackedLinks,
           recipientToken: hashRecipientId(commenterId),
         });
-        await sendPrivateReply({
+        await sendWithTokenRefresh({
+          account: automation.instagramAccount,
           context: accessToken,
-          instagramAccountId: automation.instagramAccount.instagramId,
-          commentId: commentId,
-          message: dmMessage,
-          postId: mediaId,
+          send: (ctx) =>
+            sendPrivateReply({
+              context: ctx,
+              instagramAccountId: automation.instagramAccount.instagramId,
+              commentId: commentId,
+              message: dmMessage,
+              postId: mediaId,
+            }),
         });
       }
 
@@ -839,12 +963,20 @@ async function sendPostbackOnce({
 // never holds up the re-check, which is already queued when this runs.
 async function sendFollowRecheckAck({
   context,
+  account,
   instagramAccountId,
   automationId,
   userId,
   operationId,
 }: {
   context: InstagramContext;
+  account: {
+    id: string;
+    workspaceId: string;
+    provider: "META" | "ZERNIO";
+    accessToken: string;
+    username?: string | null;
+  };
   instagramAccountId: string;
   automationId: string;
   userId: string;
@@ -864,7 +996,12 @@ async function sendFollowRecheckAck({
     );
     if (first !== "OK") return;
     const send = () =>
-      sendDirectMessage({ context, instagramAccountId, userId, message });
+      sendWithTokenRefresh({
+        account,
+        context,
+        send: (ctx) =>
+          sendDirectMessage({ context: ctx, instagramAccountId, userId, message }),
+      });
     // Its own id: the tap's id is claimed later by the link or prompt that
     // the re-check sends, and claiming it here would suppress that message.
     // Without an id the Redis NX above is the only dedupe.
@@ -888,6 +1025,7 @@ async function sendFollowRecheckAck({
  */
 async function processPostback(job: Job<ProcessPostbackJob>): Promise<void> {
   const { instagramAccountId, userId, payload, fallback } = job.data;
+  const requeueAttempt = job.data.requeueAttempt ?? 0;
 
   const isFollowCheck = payload.startsWith("followcheck:");
   if (!isFollowCheck && !payload.startsWith("reveal:")) return;
@@ -964,6 +1102,44 @@ async function processPostback(job: Job<ProcessPostbackJob>): Promise<void> {
     ]))
     .digest("hex");
 
+  // The reveal and the follow prompt are both DM sends, so both draw from
+  // the account's hourly budget (see acquireDMSlot). A requeue re-runs the
+  // whole job later with the attempt counted, under a suffixed job id — the
+  // original id is still retained by BullMQ while this job runs.
+  const requeuePostbackForRateLimit = (delayMs: number) =>
+    getDMQueue().add(
+      POSTBACK_JOB_NAME,
+      { ...job.data, requeueAttempt: requeueAttempt + 1 },
+      {
+        delay: delayMs,
+        jobId: `${job.id}_ratelimit_${requeueAttempt + 1}`,
+      }
+    );
+  const logRateLimitSkip = () =>
+    prisma.dmLog.upsert({
+      where: {
+        automationId_commentId: {
+          automationId: automation.id,
+          commentId: dedupeId,
+        },
+      },
+      create: {
+        workspaceId: automation.workspaceId,
+        automationId: automation.id,
+        instagramAccountId: automation.instagramAccountId,
+        commenterId: userId,
+        commenterName,
+        commentText: "(button tap)",
+        commentId: dedupeId,
+        status: "SKIPPED_RATE_LIMIT",
+        errorMessage: "Hourly Instagram DM rate limit reached",
+      },
+      update: {
+        status: "SKIPPED_RATE_LIMIT",
+        errorMessage: "Hourly Instagram DM rate limit reached",
+      },
+    });
+
   // Follow-gate: before revealing the link, verify the user follows. On a
   // `followcheck:` tap a non-follower gets the prompt again (no quota spent);
   // on a read fallback a non-follower is silently skipped — the gate must not
@@ -1020,6 +1196,7 @@ async function processPostback(job: Job<ProcessPostbackJob>): Promise<void> {
           if (rechecksDone === 0) {
             await sendFollowRecheckAck({
               context: accessToken,
+              account: automation.instagramAccount,
               instagramAccountId: automation.instagramAccount.instagramId,
               automationId: automation.id,
               userId,
@@ -1057,21 +1234,39 @@ async function processPostback(job: Job<ProcessPostbackJob>): Promise<void> {
           "quick favor before i send your link. i don't make any money from this, it's free. if you want to support me, just don't unfollow after, and star the repo on github if it helps you. tap the button once you're following and i'll send it over",
         commenterName,
       });
+      // The prompt is a DM send too, so it reserves a slot like the reveal
+      // does. A requeue or skip returns here; the job runs again later. A
+      // Redis failure propagates so BullMQ retries the job, as the comment
+      // path does, rather than sending over the cap unchecked.
+      const promptRateLimit = await acquireDMSlot({
+        instagramAccountId,
+        requeueAttempt,
+        requeue: requeuePostbackForRateLimit,
+        onSkip: logRateLimitSkip,
+      });
+      if (!promptRateLimit) return;
       try {
         await sendPostbackOnce({
           operationId,
           send: () =>
-            sendDirectMessageWithButton({
+            sendWithTokenRefresh({
+              account: automation.instagramAccount,
               context: accessToken,
-              instagramAccountId: automation.instagramAccount.instagramId,
-              userId: userId,
-              text: promptText,
-              buttonTitle:
-                automation.followPromptButtonLabel || "i'm following",
-              payload: `followcheck:${automation.id}`,
+              send: (ctx) =>
+                sendDirectMessageWithButton({
+                  context: ctx,
+                  instagramAccountId: automation.instagramAccount.instagramId,
+                  userId: userId,
+                  text: promptText,
+                  buttonTitle:
+                    automation.followPromptButtonLabel || "i'm following",
+                  payload: `followcheck:${automation.id}`,
+                }),
             }),
         });
       } catch (error) {
+        if (isConfirmedSendRejection(error) && promptRateLimit.reserved)
+          await releaseDMSlot(instagramAccountId);
         console.log(
           "[DM Worker] Failed to re-send follow prompt:",
           formatError(error),
@@ -1079,6 +1274,43 @@ async function processPostback(job: Job<ProcessPostbackJob>): Promise<void> {
       }
       return;
     }
+  }
+
+  // Pre-send 24-hour messaging-window check. A tap opened the window (it is
+  // recorded at webhook ingestion), so a tap is always in-window here; the
+  // check bites on the read fallback, whose window is closed unless the user
+  // has messaged or tapped since, and on delayed re-checks. Skipping up
+  // front saves a Meta call and a failed log.
+  const windowStatus = await getMessagingWindowStatus(
+    automation.instagramAccountId,
+    userId
+  );
+  if (windowStatus.state === "closed") {
+    const windowError = `24-hour messaging window closed (last interaction ${windowStatus.lastInteractionAt?.toISOString() ?? "unknown"})`;
+    await prisma.dmLog.upsert({
+      where: {
+        automationId_commentId: {
+          automationId: automation.id,
+          commentId: dedupeId,
+        },
+      },
+      create: {
+        workspaceId: automation.workspaceId,
+        automationId: automation.id,
+        instagramAccountId: automation.instagramAccountId,
+        commenterId: userId,
+        commenterName,
+        commentText: "(button tap)",
+        commentId: dedupeId,
+        status: "SKIPPED_WINDOW_CLOSED",
+        errorMessage: windowError,
+      },
+      update: {
+        status: "SKIPPED_WINDOW_CLOSED",
+        errorMessage: windowError,
+      },
+    });
+    return;
   }
 
   const usage = await reserveWorkspaceDMSend(automation.workspaceId);
@@ -1106,19 +1338,42 @@ async function processPostback(job: Job<ProcessPostbackJob>): Promise<void> {
     return;
   }
 
+  let rateLimit: RateLimitResult | null;
+  try {
+    rateLimit = await acquireDMSlot({
+      instagramAccountId,
+      requeueAttempt,
+      requeue: requeuePostbackForRateLimit,
+      onSkip: logRateLimitSkip,
+    });
+  } catch (error) {
+    await releaseWorkspaceDMReservation(
+      automation.workspaceId,
+      usage.periodStart
+    );
+    throw error;
+  }
+  if (!rateLimit) return;
+
   try {
     const delivered = await sendPostbackOnce({
       operationId,
       send: () =>
-        sendRevealDirectMessage({
-          accessToken: accessToken,
-          automation: automation,
-          userId: userId,
-          commenterName: commenterName,
-          context: "postback",
+        sendWithTokenRefresh({
+          account: automation.instagramAccount,
+          context: accessToken,
+          send: (ctx) =>
+            sendRevealDirectMessage({
+              accessToken: ctx,
+              automation: automation,
+              userId: userId,
+              commenterName: commenterName,
+              context: "postback",
+            }),
         }),
     });
     if (!delivered) {
+      if (rateLimit.reserved) await releaseDMSlot(instagramAccountId);
       await releaseWorkspaceDMReservation(
         automation.workspaceId,
         usage.periodStart,
@@ -1169,10 +1424,13 @@ async function processPostback(job: Job<ProcessPostbackJob>): Promise<void> {
     });
   } catch (originalError) {
     const error = classifySendError(originalError);
-    if (isConfirmedSendRejection(error)) await releaseWorkspaceDMReservation(
-      automation.workspaceId,
-      usage.periodStart,
-    );
+    if (isConfirmedSendRejection(error)) {
+      if (rateLimit?.reserved) await releaseDMSlot(instagramAccountId);
+      await releaseWorkspaceDMReservation(
+        automation.workspaceId,
+        usage.periodStart,
+      );
+    }
 
     // The read fallback is speculative: it only runs when the user read the
     // opening DM and never tapped the button, which means they never messaged
@@ -1225,6 +1483,7 @@ async function processPostback(job: Job<ProcessPostbackJob>): Promise<void> {
  */
 async function processFollowUp(job: Job<ProcessFollowUpJob>): Promise<void> {
   const { instagramAccountId, userId, automationId, commenterName } = job.data;
+  const requeueAttempt = job.data.requeueAttempt ?? 0;
 
   const automation = await prisma.automation.findFirst({
     where: { id: automationId, isActive: true, ...connectionScope(job.data) },
@@ -1241,6 +1500,10 @@ async function processFollowUp(job: Job<ProcessFollowUpJob>): Promise<void> {
     return;
   }
 
+  // Capture before the awaits below: property narrowing does not survive
+  // them, and the guard above already proved this is a non-empty string.
+  const followUpMessage = automation.followUpMessage;
+
   let accessToken: InstagramContext;
   try {
     accessToken = await createInstagramContext(
@@ -1251,17 +1514,62 @@ async function processFollowUp(job: Job<ProcessFollowUpJob>): Promise<void> {
     return;
   }
 
+  // The follow-up runs minutes to hours after the tap that opened the
+  // window, and its delay is capped at 24h — so this is the path most
+  // likely to find the window closed. Skip up front instead of spending a
+  // Meta call on a send Meta would reject.
+  const windowStatus = await getMessagingWindowStatus(
+    automation.instagramAccountId,
+    userId
+  );
+  if (windowStatus.state === "closed") {
+    console.log(
+      `[DM Worker] Skipping follow-up for ${userId} (automation ${automation.id}): 24-hour messaging window closed (last interaction ${windowStatus.lastInteractionAt?.toISOString() ?? "unknown"})`
+    );
+    return;
+  }
+
+  // The follow-up is a DM send too, so it reserves a slot like the reveal
+  // does. A requeue runs this job again later; a skip just logs — follow-ups
+  // have no DmLog row, and a thank-you is not worth retrying forever.
+  const rateLimit = await acquireDMSlot({
+    instagramAccountId,
+    requeueAttempt,
+    requeue: (delayMs) =>
+      getDMQueue().add(
+        FOLLOWUP_JOB_NAME,
+        { ...job.data, requeueAttempt: requeueAttempt + 1 },
+        {
+          delay: delayMs,
+          jobId: `followup_${automation.id}_${userId}_ratelimit_${requeueAttempt + 1}`,
+        }
+      ),
+    onSkip: async () => {
+      console.log(
+        `[DM Worker] Skipping follow-up for ${userId} (automation ${automation.id}): hourly Instagram DM rate limit reached`
+      );
+    },
+  });
+  if (!rateLimit) return;
+
   try {
-    await sendDirectMessage({
+    await sendWithTokenRefresh({
+      account: automation.instagramAccount,
       context: accessToken,
-      instagramAccountId: automation.instagramAccount.instagramId,
-      userId: userId,
-      message: renderMessageWithoutLink({
-        message: automation.followUpMessage,
-        commenterName: commenterName ?? null,
-      }),
+      send: (ctx) =>
+        sendDirectMessage({
+          context: ctx,
+          instagramAccountId: automation.instagramAccount.instagramId,
+          userId: userId,
+          message: renderMessageWithoutLink({
+            message: followUpMessage,
+            commenterName: commenterName ?? null,
+          }),
+        }),
     });
   } catch (error) {
+    if (isConfirmedSendRejection(error) && rateLimit.reserved)
+      await releaseDMSlot(instagramAccountId);
     console.log(
       "[DM Worker] Failed to send follow-up message:",
       formatError(error)
@@ -1279,6 +1587,7 @@ async function processFollowUp(job: Job<ProcessFollowUpJob>): Promise<void> {
  */
 async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
   const { instagramAccountId, messageId, messageText, senderId } = job.data;
+  const requeueAttempt = job.data.requeueAttempt ?? 0;
 
   const automations = await prisma.automation.findMany({
     where: {
@@ -1321,7 +1630,10 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
     });
 
     // Already replied to this message (or deliberately skipped it) — a retry
-    // of the job must not send a second DM.
+    // of the job must not send a second DM. Rate-limit and window-closed
+    // skips are deliberately NOT in this list: both are re-evaluated on
+    // every attempt (the cap resets, the window can reopen), so a retry
+    // after either skip must be allowed to send.
     if (
       existingLog?.status === "SENT" ||
       existingLog?.status === "SKIPPED_PLAN_LIMIT" ||
@@ -1339,6 +1651,36 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
       commentId: dedupeId,
       matchedKeyword: matchResult.matchedKeyword,
     };
+
+    // Pre-send 24-hour messaging-window check. The sender just messaged us,
+    // so this is normally open — it bites when a job was delayed past the
+    // window (retries, requeues) and would otherwise spend a Meta call on a
+    // send Meta rejects.
+    const messageWindowStatus = await getMessagingWindowStatus(
+      automation.instagramAccountId,
+      senderId
+    );
+    if (messageWindowStatus.state === "closed") {
+      const windowError = `24-hour messaging window closed (last interaction ${messageWindowStatus.lastInteractionAt?.toISOString() ?? "unknown"})`;
+      await prisma.dmLog.upsert({
+        where: {
+          automationId_commentId: {
+            automationId: automation.id,
+            commentId: dedupeId,
+          },
+        },
+        create: {
+          ...logBase,
+          status: "SKIPPED_WINDOW_CLOSED",
+          errorMessage: windowError,
+        },
+        update: {
+          status: "SKIPPED_WINDOW_CLOSED",
+          errorMessage: windowError,
+        },
+      });
+      continue;
+    }
 
     if (!hasInstagramCredentials(automation.instagramAccount)) {
       await prisma.dmLog.upsert({
@@ -1437,6 +1779,67 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
       continue;
     }
 
+    // The reply is a DM send, so it reserves an hourly slot like the comment
+    // path does. A requeue runs this job again later; a skip logs the row.
+    let rateLimit: RateLimitResult | null;
+    try {
+      rateLimit = await acquireDMSlot({
+        instagramAccountId,
+        requeueAttempt,
+        requeue: (delayMs) =>
+          getDMQueue().add(
+            MESSAGE_JOB_NAME,
+            { ...job.data, requeueAttempt: requeueAttempt + 1 },
+            {
+              delay: delayMs,
+              jobId: `message_${instagramAccountId}_${Buffer.from(messageId).toString("base64url")}_ratelimit_${requeueAttempt + 1}`,
+            }
+          ),
+        onSkip: () =>
+          prisma.dmLog.upsert({
+            where: {
+              automationId_commentId: {
+                automationId: automation.id,
+                commentId: dedupeId,
+              },
+            },
+            create: {
+              ...logBase,
+              status: "SKIPPED_RATE_LIMIT",
+              errorMessage: "Hourly Instagram DM rate limit reached",
+            },
+            update: {
+              status: "SKIPPED_RATE_LIMIT",
+              errorMessage: "Hourly Instagram DM rate limit reached",
+            },
+          }),
+      });
+    } catch (error) {
+      await releaseWorkspaceDMReservation(
+        automation.workspaceId,
+        usage.periodStart
+      );
+      await prisma.dmLog.upsert({
+        where: {
+          automationId_commentId: {
+            automationId: automation.id,
+            commentId: dedupeId,
+          },
+        },
+        create: {
+          ...logBase,
+          status: "FAILED",
+          errorMessage: formatError(error),
+        },
+        update: {
+          status: "FAILED",
+          errorMessage: formatError(error),
+        },
+      });
+      throw error;
+    }
+    if (!rateLimit) continue;
+
     try {
       if (sendFollowPrompt) {
         const promptText = renderMessageWithoutLink({
@@ -1445,21 +1848,31 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
             "Almost there! Follow me and tap the button below to grab your link 💛",
           commenterName,
         });
-        await sendDirectMessageWithButton({
+        await sendWithTokenRefresh({
+          account: automation.instagramAccount,
           context: accessToken,
-          instagramAccountId: automation.instagramAccount.instagramId,
-          userId: senderId,
-          text: promptText,
-          buttonTitle: automation.followPromptButtonLabel || "I'm following ✅",
-          payload: `followcheck:${automation.id}`,
+          send: (ctx) =>
+            sendDirectMessageWithButton({
+              context: ctx,
+              instagramAccountId: automation.instagramAccount.instagramId,
+              userId: senderId,
+              text: promptText,
+              buttonTitle: automation.followPromptButtonLabel || "I'm following ✅",
+              payload: `followcheck:${automation.id}`,
+            }),
         });
       } else {
-        await sendRevealDirectMessage({
-          accessToken: accessToken,
-          automation: automation,
-          userId: senderId,
-          commenterName: commenterName,
-          context: "message trigger",
+        await sendWithTokenRefresh({
+          account: automation.instagramAccount,
+          context: accessToken,
+          send: (ctx) =>
+            sendRevealDirectMessage({
+              accessToken: ctx,
+              automation: automation,
+              userId: senderId,
+              commenterName: commenterName,
+              context: "message trigger",
+            }),
         });
 
         // The link has been delivered, so the appreciation follow-up applies
@@ -1503,6 +1916,11 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
         },
       });
     } catch (error) {
+      // A confirmed rejection proves nothing was delivered, so the reserved
+      // slot is handed back (as the comment path does). An unconfirmed send
+      // may have delivered, so its slot stays counted.
+      if (isConfirmedSendRejection(error) && rateLimit?.reserved)
+        await releaseDMSlot(instagramAccountId);
       await releaseWorkspaceDMReservation(
         automation.workspaceId,
         usage.periodStart

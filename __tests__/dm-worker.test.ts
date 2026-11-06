@@ -10,6 +10,8 @@ const {
   mockSendDirectMessage,
   mockSendDirectMessageWithLinkButton,
   mockDecryptToken,
+  mockEncryptToken,
+  mockRefreshLongLivedToken,
   mockMatchKeywords,
   mockReserveDMSlot,
   mockReleaseDMSlot,
@@ -20,6 +22,7 @@ const {
   mockPrisma: {
     zernioConnection: { findUnique: vi.fn() },
     postbackDelivery: { create: vi.fn(), delete: vi.fn() },
+    recipientInteraction: { findUnique: vi.fn(), upsert: vi.fn() },
     automation: {
       findMany: vi.fn(),
       findFirst: vi.fn(),
@@ -34,6 +37,7 @@ const {
     },
     instagramAccount: {
       findUnique: vi.fn(),
+      update: vi.fn(),
     },
     operationalEvent: {
       create: vi.fn(),
@@ -47,6 +51,8 @@ const {
   mockSendDirectMessage: vi.fn(),
   mockSendDirectMessageWithLinkButton: vi.fn(),
   mockDecryptToken: vi.fn(),
+  mockEncryptToken: vi.fn(),
+  mockRefreshLongLivedToken: vi.fn(),
   mockMatchKeywords: vi.fn(),
   mockReserveDMSlot: vi.fn(),
   mockReleaseDMSlot: vi.fn(),
@@ -68,6 +74,7 @@ vi.mock("@/lib/meta/client", () => ({
   sendDirectMessage: mockSendDirectMessage,
   sendDirectMessageWithLinkButton: mockSendDirectMessageWithLinkButton,
   sendCommentReply: vi.fn(),
+  refreshLongLivedToken: mockRefreshLongLivedToken,
   MetaApiError: class MetaApiError extends Error {
     code: number;
     constructor(
@@ -91,6 +98,7 @@ vi.mock("@/lib/meta/client", () => ({
 
 vi.mock("@/lib/meta/oauth", () => ({
   decryptToken: mockDecryptToken,
+  encryptToken: mockEncryptToken,
 }));
 
 vi.mock("@/lib/utils/keyword-matcher", () => ({
@@ -137,7 +145,7 @@ vi.mock("bullmq", () => {
   };
 });
 
-import { MetaApiError, RateLimitError } from "@/lib/meta/client";
+import { MetaApiError, RateLimitError, TokenExpiredError } from "@/lib/meta/client";
 import { createDMWorker } from "../lib/queue/dm-worker";
 import { getRedisConnection } from "@/lib/queue/client";
 import { hashRecipientId } from "@/lib/tracking/server";
@@ -166,6 +174,9 @@ const mockAutomation = {
     id: "ig_account_row_1",
     instagramId: "ig_456",
     accessToken: "encrypted_token_abc",
+    provider: "META",
+    workspaceId: "workspace_123",
+    username: "test_account",
   },
   workspace: {
     id: "workspace_123",
@@ -243,8 +254,19 @@ beforeEach(() => {
   mockPrisma.instagramAccount.findUnique.mockResolvedValue({
     workspaceId: "workspace_123",
   });
+  mockPrisma.instagramAccount.update.mockResolvedValue({});
   mockPrisma.operationalEvent.create.mockResolvedValue({});
+  // No interaction ever recorded: the messaging window is unknown, which
+  // fails open, so the default worker path sends. Window-closed tests
+  // override this with a stale lastInteractionAt.
+  mockPrisma.recipientInteraction.findUnique.mockResolvedValue(null);
+  mockPrisma.recipientInteraction.upsert.mockResolvedValue({});
   mockDecryptToken.mockReturnValue("decrypted_token");
+  mockEncryptToken.mockReturnValue("encrypted_new_token");
+  mockRefreshLongLivedToken.mockResolvedValue({
+    accessToken: "refreshed_token",
+    expiresIn: 5184000,
+  });
   mockMatchKeywords.mockReturnValue({ matched: true, matchedKeyword: "LINK" });
   mockReserveWorkspaceDMSend.mockResolvedValue({
     allowed: true,
@@ -1763,4 +1785,360 @@ it("retains the public reply claim if sending succeeded but its log write failed
   await process({ ...createMockJob(), id: "next-poll" });
   expect(sendCommentReply).toHaveBeenCalledTimes(1);
   expect(mockSendPrivateReply).toHaveBeenCalledTimes(1);
+});
+
+describe("DM Worker — Phase 2 reliability: rate limiting beyond the comment path", () => {
+  const blockedRequeue = {
+    allowed: false,
+    currentCount: 750,
+    remainingDMs: 0,
+    shouldRequeue: true,
+    requeueDelayMs: 30 * 60 * 1000,
+    shouldSkip: false,
+    reserved: false,
+  };
+  const blockedSkip = {
+    allowed: false,
+    currentCount: 750,
+    remainingDMs: 0,
+    shouldRequeue: false,
+    requeueDelayMs: 0,
+    shouldSkip: true,
+    reserved: false,
+  };
+
+  it("requeues a postback reveal when the hourly cap is hit, without sending", async () => {
+    mockPrisma.automation.findFirst.mockResolvedValue(mockAutomation);
+    mockReserveDMSlot.mockResolvedValue(blockedRequeue);
+
+    await getProcessor()(createMockPostbackJob());
+
+    expect(mockSendDirectMessage).not.toHaveBeenCalled();
+    expect(mockQueueAdd).toHaveBeenCalledWith(
+      "process-postback",
+      expect.objectContaining({ requeueAttempt: 1 }),
+      expect.objectContaining({
+        delay: 30 * 60 * 1000,
+        jobId: "postback_job_001_ratelimit_1",
+      })
+    );
+  });
+
+  it("logs a postback as rate-limited after the requeue budget is spent", async () => {
+    mockPrisma.automation.findFirst.mockResolvedValue(mockAutomation);
+    mockReserveDMSlot.mockResolvedValue(blockedSkip);
+
+    await getProcessor()(createMockPostbackJob());
+
+    expect(mockSendDirectMessage).not.toHaveBeenCalled();
+    expect(mockQueueAdd).not.toHaveBeenCalled();
+    expect(mockPrisma.dmLog.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ status: "SKIPPED_RATE_LIMIT" }),
+      })
+    );
+  });
+
+  it("releases the postback slot when the send is a confirmed rejection", async () => {
+    mockPrisma.automation.findFirst.mockResolvedValue(mockAutomation);
+    mockSendDirectMessage.mockRejectedValueOnce(
+      new MetaApiError(100, undefined, undefined, "Invalid recipient")
+    );
+
+    await expect(getProcessor()(createMockPostbackJob())).rejects.toThrow();
+    expect(mockReleaseDMSlot).toHaveBeenCalledWith("ig_456");
+    expect(mockReleaseWorkspaceDMReservation).toHaveBeenCalled();
+  });
+
+  function createMockFollowUpJob(data: Record<string, unknown> = {}) {
+    return {
+      name: "process-followup",
+      data: {
+        instagramAccountId: "ig_456",
+        userId: "commenter_999",
+        automationId: "auto_789",
+        commenterName: "commenter_user",
+        ...data,
+      },
+      id: "followup_job_001",
+      attemptsMade: 0,
+    };
+  }
+
+  const followUpAutomation = {
+    ...mockAutomation,
+    followUpEnabled: true,
+    followUpMessage: "Thanks for following up!",
+  };
+
+  it("requeues a follow-up when the hourly cap is hit, without sending", async () => {
+    mockPrisma.automation.findFirst.mockResolvedValue(followUpAutomation);
+    mockReserveDMSlot.mockResolvedValue(blockedRequeue);
+
+    await getProcessor()(createMockFollowUpJob());
+
+    expect(mockSendDirectMessage).not.toHaveBeenCalled();
+    expect(mockQueueAdd).toHaveBeenCalledWith(
+      "process-followup",
+      expect.objectContaining({ requeueAttempt: 1 }),
+      expect.objectContaining({
+        delay: 30 * 60 * 1000,
+        jobId: "followup_auto_789_commenter_999_ratelimit_1",
+      })
+    );
+  });
+
+  it("skips a follow-up with a log line once the requeue budget is spent", async () => {
+    mockPrisma.automation.findFirst.mockResolvedValue(followUpAutomation);
+    mockReserveDMSlot.mockResolvedValue(blockedSkip);
+
+    await getProcessor()(createMockFollowUpJob());
+
+    expect(mockSendDirectMessage).not.toHaveBeenCalled();
+    expect(mockQueueAdd).not.toHaveBeenCalled();
+  });
+
+  it("releases the follow-up slot when the send is a confirmed rejection", async () => {
+    mockPrisma.automation.findFirst.mockResolvedValue(followUpAutomation);
+    mockSendDirectMessage.mockRejectedValueOnce(
+      new MetaApiError(100, undefined, undefined, "Invalid recipient")
+    );
+
+    await getProcessor()(createMockFollowUpJob());
+
+    expect(mockReleaseDMSlot).toHaveBeenCalledWith("ig_456");
+  });
+
+  function createMockMessageJob(data: Record<string, unknown> = {}) {
+    return {
+      name: "process-message",
+      data: {
+        instagramAccountId: "ig_456",
+        messageId: "mid_abc",
+        messageText: "can I get the LINK?",
+        senderId: "commenter_999",
+        ...data,
+      },
+      id: "message_job_001",
+      attemptsMade: 0,
+    };
+  }
+
+  const dmTriggerAutomation = {
+    ...mockAutomation,
+    dmTriggerEnabled: true,
+    requireFollow: false,
+    followPromptMessage: null,
+    followPromptButtonLabel: null,
+  };
+
+  it("requeues a DM-trigger reply when the hourly cap is hit, without sending", async () => {
+    mockPrisma.automation.findMany.mockResolvedValue([dmTriggerAutomation]);
+    mockReserveDMSlot.mockResolvedValue(blockedRequeue);
+
+    await getProcessor()(createMockMessageJob());
+
+    expect(mockSendDirectMessage).not.toHaveBeenCalled();
+    expect(mockQueueAdd).toHaveBeenCalledWith(
+      "process-message",
+      expect.objectContaining({ requeueAttempt: 1 }),
+      expect.objectContaining({
+        delay: 30 * 60 * 1000,
+        jobId: expect.stringContaining("_ratelimit_1"),
+      })
+    );
+  });
+
+  it("logs a DM-trigger reply as rate-limited after the requeue budget is spent", async () => {
+    mockPrisma.automation.findMany.mockResolvedValue([dmTriggerAutomation]);
+    mockReserveDMSlot.mockResolvedValue(blockedSkip);
+
+    await getProcessor()(createMockMessageJob());
+
+    expect(mockSendDirectMessage).not.toHaveBeenCalled();
+    expect(mockQueueAdd).not.toHaveBeenCalled();
+    expect(mockPrisma.dmLog.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ status: "SKIPPED_RATE_LIMIT" }),
+      })
+    );
+  });
+});
+
+describe("DM Worker — Phase 2 reliability: 24-hour messaging window", () => {
+  const staleInteraction = {
+    lastInteractionAt: new Date(Date.now() - 25 * 60 * 60 * 1000),
+  };
+  const freshInteraction = {
+    lastInteractionAt: new Date(Date.now() - 60 * 60 * 1000),
+  };
+
+  it("skips a postback reveal when the window is closed and logs it clearly", async () => {
+    mockPrisma.automation.findFirst.mockResolvedValue(mockAutomation);
+    mockPrisma.recipientInteraction.findUnique.mockResolvedValue(staleInteraction);
+
+    await getProcessor()(createMockPostbackJob());
+
+    expect(mockSendDirectMessage).not.toHaveBeenCalled();
+    expect(mockReserveWorkspaceDMSend).not.toHaveBeenCalled();
+    expect(mockPrisma.dmLog.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          status: "SKIPPED_WINDOW_CLOSED",
+          errorMessage: expect.stringContaining("24-hour messaging window closed"),
+        }),
+      })
+    );
+  });
+
+  it("sends a postback reveal when the window is open", async () => {
+    mockPrisma.automation.findFirst.mockResolvedValue(mockAutomation);
+    mockPrisma.recipientInteraction.findUnique.mockResolvedValue(freshInteraction);
+
+    await getProcessor()(createMockPostbackJob());
+
+    expect(mockSendDirectMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips a follow-up when the window closed during its delay", async () => {
+    mockPrisma.automation.findFirst.mockResolvedValue({
+      ...mockAutomation,
+      followUpEnabled: true,
+      followUpMessage: "Thanks for following up!",
+    });
+    mockPrisma.recipientInteraction.findUnique.mockResolvedValue(staleInteraction);
+
+    await getProcessor()({
+      name: "process-followup",
+      data: {
+        instagramAccountId: "ig_456",
+        userId: "commenter_999",
+        automationId: "auto_789",
+        commenterName: "commenter_user",
+      },
+      id: "followup_job_001",
+      attemptsMade: 0,
+    });
+
+    expect(mockSendDirectMessage).not.toHaveBeenCalled();
+    expect(mockReserveDMSlot).not.toHaveBeenCalled();
+  });
+
+  it("skips a DM-trigger reply when the window closed while the job waited", async () => {
+    mockPrisma.automation.findMany.mockResolvedValue([
+      {
+        ...mockAutomation,
+        dmTriggerEnabled: true,
+        requireFollow: false,
+      },
+    ]);
+    mockPrisma.recipientInteraction.findUnique.mockResolvedValue(staleInteraction);
+
+    await getProcessor()({
+      name: "process-message",
+      data: {
+        instagramAccountId: "ig_456",
+        messageId: "mid_abc",
+        messageText: "can I get the LINK?",
+        senderId: "commenter_999",
+      },
+      id: "message_job_001",
+      attemptsMade: 0,
+    });
+
+    expect(mockSendDirectMessage).not.toHaveBeenCalled();
+    expect(mockPrisma.dmLog.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ status: "SKIPPED_WINDOW_CLOSED" }),
+      })
+    );
+  });
+});
+
+describe("DM Worker — Phase 2 reliability: in-worker token refresh", () => {
+  // A fresh copy per test: the refresh mutates the account's stored token in
+  // place, and mockAutomation is shared across the file.
+  function freshAutomation() {
+    return {
+      ...mockAutomation,
+      instagramAccount: { ...mockAutomation.instagramAccount },
+    };
+  }
+
+  it("refreshes an expired token and retries the send once", async () => {
+    mockPrisma.automation.findMany.mockResolvedValue([freshAutomation()]);
+    mockSendPrivateReply
+      .mockRejectedValueOnce(new TokenExpiredError("Session expired"))
+      .mockResolvedValue({
+        recipient_id: "commenter_999",
+        message_id: "msg_001",
+      });
+
+    await getProcessor()(createMockJob());
+
+    expect(mockRefreshLongLivedToken).toHaveBeenCalledTimes(1);
+    expect(mockRefreshLongLivedToken).toHaveBeenCalledWith("decrypted_token");
+    expect(mockPrisma.instagramAccount.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "ig_account_row_1" },
+        data: expect.objectContaining({ accessToken: "encrypted_new_token" }),
+      })
+    );
+    // First attempt with the stored token, retry with the refreshed one.
+    expect(mockSendPrivateReply).toHaveBeenCalledTimes(2);
+    expect(mockSendPrivateReply).toHaveBeenNthCalledWith(
+      1,
+      "decrypted_token",
+      "ig_456",
+      "comment_555",
+      expect.any(String)
+    );
+    expect(mockSendPrivateReply).toHaveBeenNthCalledWith(
+      2,
+      "refreshed_token",
+      "ig_456",
+      "comment_555",
+      expect.any(String)
+    );
+    expect(mockPrisma.dmLog.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: "SENT" }),
+      })
+    );
+  });
+
+  it("fails the job as a token error when the inline refresh also fails", async () => {
+    mockPrisma.automation.findMany.mockResolvedValue([freshAutomation()]);
+    mockSendPrivateReply.mockRejectedValue(
+      new TokenExpiredError("Session expired")
+    );
+    mockRefreshLongLivedToken.mockRejectedValue(
+      new Error("Meta rejected the refresh")
+    );
+
+    await expect(getProcessor()(createMockJob())).rejects.toMatchObject({
+      name: "TokenExpiredError",
+    });
+
+    // The retry never ran: the refresh failed first.
+    expect(mockSendPrivateReply).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.operationalEvent.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          source: "TOKEN_REFRESH",
+          level: "ERROR",
+        }),
+      })
+    );
+  });
+
+  it("does not refresh for a non-expiry send failure", async () => {
+    mockPrisma.automation.findMany.mockResolvedValue([freshAutomation()]);
+    mockSendPrivateReply.mockRejectedValue(
+      new MetaApiError(100, undefined, undefined, "Invalid recipient")
+    );
+
+    await expect(getProcessor()(createMockJob())).rejects.toThrow();
+    expect(mockRefreshLongLivedToken).not.toHaveBeenCalled();
+  });
 });
