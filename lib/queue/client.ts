@@ -47,6 +47,9 @@ export interface ProcessPostbackJob {
   payload: string;
   mid?: string;
   fallback?: boolean;
+  // How many times this job has been requeued for the hourly rate limit
+  // (0 = first attempt). Mirrors ProcessCommentJob.requeueAttempt.
+  requeueAttempt?: number;
   // Set on the delayed second pass of a follow-gate check. Instagram does not
   // report a brand-new follow immediately, so the first `false` is re-checked
   // later instead of rejecting the tap outright.
@@ -65,6 +68,9 @@ export interface ProcessFollowUpJob {
   userId: string;
   automationId: string;
   commenterName?: string | null;
+  // How many times this job has been requeued for the hourly rate limit
+  // (0 = first attempt). Mirrors ProcessCommentJob.requeueAttempt.
+  requeueAttempt?: number;
 }
 
 // An inbound DM from a user. Campaigns with `dmTriggerEnabled` whose keywords
@@ -75,6 +81,9 @@ export interface ProcessMessageJob {
   messageId: string;
   messageText: string;
   senderId: string;
+  // How many times this job has been requeued for the hourly rate limit
+  // (0 = first attempt). Mirrors ProcessCommentJob.requeueAttempt.
+  requeueAttempt?: number;
 }
 
 export type DmQueueJob =

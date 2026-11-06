@@ -37,6 +37,12 @@ const MESSAGES: Record<string, { tone: Tone; title: StaticMessageKey; detail: St
     detail:
       "That Instagram account is connected to another workspace. Disconnect it there first, or connect a different account.",
   },
+  personal_account: {
+    tone: "error",
+    title: "Personal Instagram account",
+    detail:
+      "That Instagram account is a personal account. OpenReply can only send DMs from a Business or Creator account. Switch it to a professional account in the Instagram app (Settings → Account type and tools → Switch to professional account), then connect again.",
+  },
 };
 
 export function InstagramConnectNotice() {
