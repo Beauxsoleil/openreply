@@ -97,6 +97,27 @@ they belong to:
 `condition: service_healthy` matters: started alone, the first run fires while
 the web app is still booting and dies on connection refused.
 
+One catch: `service_healthy` only means something if the `web` service in the
+same stack actually defines a healthcheck. The `Dockerfile` does not declare
+one, so define it on the web service in your Compose/Dokploy stack — this is
+the definition used by `docker-compose.prod.yml`:
+
+```yaml
+  web:
+    # ... your web service ...
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+```
+
+`/api/health` answers 200 only when the database, Redis, queue, and worker
+heartbeat are all healthy, and 503 otherwise, so `wget` failing on the 503
+is what makes the gate real. Without a healthcheck on `web`, the condition
+degrades to "started" and the first cron run can still fire too early.
+
 The script calls `attach-next-reel` every five minutes and the other two once a
 day. Five minutes is deliberate — on Vercel this runs daily, which means a
 campaign prepared before publishing stays inactive for the whole first evening,
