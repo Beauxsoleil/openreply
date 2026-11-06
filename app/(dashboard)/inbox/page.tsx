@@ -345,7 +345,7 @@ export default function InboxPage() {
                 <button
                   type="button"
                   onClick={() => setActiveId(null)}
-                  className="-ml-1 rounded px-2 py-1 text-muted hover:text-foreground sm:hidden"
+                  className="-ml-1 min-h-11 min-w-11 rounded px-2 py-1 text-muted hover:text-foreground sm:hidden"
                   aria-label={t("Back to conversations")}
                 >
                   {t("Back")}
@@ -403,6 +403,7 @@ export default function InboxPage() {
                     onKeyDown={handleKeyDown}
                     rows={1}
                     placeholder={t("Write a reply…  (Enter to send, Shift+Enter for a new line)")}
+                    aria-label={t("Write a reply…  (Enter to send, Shift+Enter for a new line)")}
                     className="max-h-32 min-h-[40px] flex-1 resize-none rounded-lg border border-border bg-surface px-3 py-2 text-sm text-foreground placeholder:text-zinc-500 focus:border-accent/40 focus:outline-none"
                   />
                   <button

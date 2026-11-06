@@ -13,6 +13,8 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import CampaignPreview, { type PreviewTab } from "@/components/campaign-preview";
+import ErrorState from "@/components/ui/error-state";
+import StatusBadge from "@/components/status-badge";
 
 interface Campaign {
   id: string;
@@ -53,6 +55,14 @@ interface Campaign {
     clicks: number;
     ctr: number;
   };
+  recentLogs?: Array<{
+    id: string;
+    commenterName: string | null;
+    commentText: string;
+    status: string;
+    errorMessage: string | null;
+    createdAt: string;
+  }>;
 }
 
 type Tab = "insights" | "preview";
@@ -65,23 +75,42 @@ export default function CampaignDetailPage() {
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [postThumb, setPostThumb] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("insights");
   const [previewTab, setPreviewTab] = useState<PreviewTab>("dm");
   const [busy, setBusy] = useState(false);
 
+  async function loadCampaign() {
+    setLoading(true);
+    setNotFound(false);
+    setLoadError(false);
+    try {
+      const res = await fetch(`/api/campaigns/${id}`, { cache: "no-store" });
+      const payload = await res.json();
+      if (!payload.success) {
+        if (res.status === 404) setNotFound(true);
+        else setLoadError(true);
+        return;
+      }
+      setCampaign(payload.data as Campaign);
+    } catch {
+      setLoadError(true);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   useEffect(() => {
-    fetch("/api/automations", { cache: "no-store" })
-      .then((r) => r.json())
-      .then((payload) => {
-        if (!payload.success) return setNotFound(true);
-        const found = (payload.data as Campaign[]).find((c) => c.id === id);
-        if (!found) return setNotFound(true);
-        setCampaign(found);
-      })
-      .catch(() => setNotFound(true))
-      .finally(() => setLoading(false));
+    // Deferred a tick so the initial state write doesn't cascade-render;
+    // same convention as the campaigns/logs pages.
+    const timer = window.setTimeout(() => {
+      void loadCampaign();
+    }, 0);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   useEffect(() => {
@@ -115,13 +144,22 @@ export default function CampaignDetailPage() {
   async function toggleActive() {
     if (!campaign) return;
     setBusy(true);
+    setActionError(null);
+    const nextActive = !campaign.isActive;
+    // Optimistic flip, rolled back if the PATCH fails.
+    setCampaign({ ...campaign, isActive: nextActive });
     try {
-      await fetch(`/api/automations?id=${campaign.id}`, {
+      const res = await fetch(`/api/automations?id=${campaign.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ isActive: !campaign.isActive }),
+        body: JSON.stringify({ isActive: nextActive }),
       });
-      setCampaign({ ...campaign, isActive: !campaign.isActive });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success) throw new Error(data?.error ?? "toggle failed");
+    } catch (err) {
+      console.error("Failed to toggle:", err);
+      setCampaign({ ...campaign, isActive: !nextActive });
+      setActionError(t("Could not update this campaign. Please try again."));
     } finally {
       setBusy(false);
     }
@@ -129,6 +167,9 @@ export default function CampaignDetailPage() {
 
   if (loading) {
     return <div className="panel h-64 rounded" />;
+  }
+  if (loadError) {
+    return <ErrorState onRetry={() => void loadCampaign()} />;
   }
   if (notFound || !campaign) {
     return (
@@ -325,7 +366,14 @@ export default function CampaignDetailPage() {
           </div>
         </div>
 
+        {actionError && (
+          <div role="alert" className="rounded-lg border border-error/20 bg-error/10 p-3 text-sm text-error">
+            {actionError}
+          </div>
+        )}
+
         {tab === "insights" && (
+          <div className="space-y-6">
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
             {metrics.map((m) => (
               <div key={m.label} className="panel rounded p-4">
@@ -335,6 +383,45 @@ export default function CampaignDetailPage() {
                 </p>
               </div>
             ))}
+          </div>
+
+          <div className="panel rounded p-4 sm:p-6">
+            <h2 className="text-sm font-semibold text-foreground">
+              {t("Recent DM logs")}
+            </h2>
+            {!campaign.recentLogs || campaign.recentLogs.length === 0 ? (
+              <p className="mt-3 text-sm text-muted">
+                {t("No DM logs for this campaign yet.")}
+              </p>
+            ) : (
+              <div className="mt-3 space-y-3">
+                {campaign.recentLogs.map((log) => (
+                  <div
+                    key={log.id}
+                    className="border-b border-border pb-3 last:border-0"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
+                      <p className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+                        @{log.commenterName ?? "unknown"}
+                      </p>
+                      <StatusBadge status={log.status} />
+                    </div>
+                    <p className="mt-1 truncate text-xs text-muted">
+                      {log.commentText}
+                    </p>
+                    {log.errorMessage && (
+                      <p className="mt-1 break-words text-xs text-error">
+                        {log.errorMessage}
+                      </p>
+                    )}
+                    <p className="mt-1 text-xs text-muted">
+                      {new Date(log.createdAt).toLocaleString()}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
           </div>
         )}
 

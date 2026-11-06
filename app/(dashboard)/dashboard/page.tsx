@@ -7,10 +7,11 @@
  */
 
 import { useI18n } from "@/lib/i18n/provider";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import AccountSelect, { type AccountOption } from "@/components/account-select";
 import StatCard from "@/components/stat-card";
 import StatusBadge from "@/components/status-badge";
+import ErrorState from "@/components/ui/error-state";
 
 interface DashboardStats {
   userName: string | null;
@@ -45,25 +46,44 @@ export default function DashboardPage() {
   const { t, label } = useI18n();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [selectedAccountId, setSelectedAccountId] = useState("all");
 
-  useEffect(() => {
-    const params = new URLSearchParams();
-    if (selectedAccountId !== "all") {
-      params.set("instagramAccountId", selectedAccountId);
+  const loadStats = useCallback(async () => {
+    setLoading(true);
+    setLoadError(false);
+    try {
+      const params = new URLSearchParams();
+      if (selectedAccountId !== "all") {
+        params.set("instagramAccountId", selectedAccountId);
+      }
+      const res = await fetch(
+        `/api/dashboard/stats${params.size ? `?${params}` : ""}`
+      );
+      const data = await res.json();
+      if (data.success) {
+        setStats(data.data);
+      } else {
+        setLoadError(true);
+      }
+    } catch (err) {
+      console.error(err);
+      setLoadError(true);
+    } finally {
+      setLoading(false);
     }
-
-    fetch(`/api/dashboard/stats${params.size ? `?${params}` : ""}`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.success) setStats(data.data);
-      })
-      .catch(console.error)
-      .finally(() => setLoading(false));
   }, [selectedAccountId]);
 
+  useEffect(() => {
+    // Deferred a tick so the initial state write doesn't cascade-render;
+    // same convention as the campaigns/logs pages.
+    const timer = window.setTimeout(() => {
+      void loadStats();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadStats]);
+
   function handleAccountChange(accountId: string) {
-    setLoading(true);
     setSelectedAccountId(accountId);
   }
 
@@ -81,6 +101,11 @@ export default function DashboardPage() {
         </div>
       </div>
     );
+  }
+
+  // A failed fetch must not render as zeros — show the error instead.
+  if (loadError && !stats) {
+    return <ErrorState onRetry={() => void loadStats()} />;
   }
 
   const maxDM = Math.max(...(stats?.dailyDMs.map((d) => d.count) ?? [1]), 1);
