@@ -79,6 +79,10 @@ export interface InstagramUser {
   // Current follower total. Point-in-time only — Instagram exposes no history
   // for this field, so long-run trends come from FollowerSnapshot instead.
   followers_count?: number;
+  // BUSINESS, CREATOR, or PERSONAL. The connect callback rejects PERSONAL:
+  // the messaging API cannot send from a personal account, so connecting one
+  // only fails later at send time.
+  account_type?: string;
 }
 
 export interface InstagramComment {
@@ -664,11 +668,24 @@ export async function getConversationMessages(
   return data.messages?.data ?? [];
 }
 
+/**
+ * Whether the connected Instagram account can use the messaging API.
+ *
+ * Only an explicit PERSONAL is rejected. An absent `account_type` fails open:
+ * the field is not returned for every token, and blocking those connects
+ * would break accounts that worked before this check existed.
+ */
+export function isProfessionalInstagramAccount(
+  user: Pick<InstagramUser, "account_type">
+): boolean {
+  return user.account_type !== "PERSONAL";
+}
+
 export async function getUserInfo(accessToken: string): Promise<InstagramUser> {
   const url = new URL(`${instagramGraphBase()}/me`);
   url.searchParams.set(
     "fields",
-    "id,user_id,username,name,profile_picture_url,followers_count"
+    "id,user_id,username,name,profile_picture_url,followers_count,account_type"
   );
   url.searchParams.set("access_token", accessToken);
 

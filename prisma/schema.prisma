@@ -158,6 +158,7 @@ model InstagramAccount {
   workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   automations Automation[]
   dmLogs      DmLog[]
+  recipientInteractions RecipientInteraction[]
   linkClicks  LinkClick[]
   followerSnapshots FollowerSnapshot[]
 
@@ -392,6 +393,10 @@ enum DmStatus {
   SKIPPED_RATE_LIMIT
   SKIPPED_PLAN_LIMIT
   SKIPPED_NO_MATCH
+  // Pre-send 24-hour messaging-window check (see lib/instagram/messaging-window.ts):
+  // the last recorded interaction with this recipient is older than 24 hours,
+  // so no Meta call was made.
+  SKIPPED_WINDOW_CLOSED
 }
 
 enum WebhookStatus {
@@ -434,4 +439,30 @@ model ZernioConnection {
 model PostbackDelivery {
   id String @id
   createdAt DateTime @default(now())
+}
+
+// Last time a recipient interacted with one of our Instagram accounts, as
+// observed from webhooks (inbound message, button tap). The 24-hour messaging
+// window Meta enforces on DMs opens on that interaction, so the worker checks
+// this row before sending instead of spending a Meta call on a send Meta
+// would reject. A read receipt is deliberately NOT an interaction: Meta does
+// not treat reading a message as opening the window (see the read-fallback
+// handling in lib/queue/dm-worker.ts).
+//
+// No row means "never seen interacting" — callers treat that as unknown and
+// fail open (let Meta decide), never as closed. Only a row older than 24h
+// proves the window is closed.
+model RecipientInteraction {
+  id                 String   @id @default(cuid())
+  instagramAccountId String
+  // The recipient's Instagram-scoped id (IGSID).
+  recipientId        String
+  lastInteractionAt  DateTime
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  instagramAccount InstagramAccount @relation(fields: [instagramAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([instagramAccountId, recipientId])
+  @@index([instagramAccountId])
 }

@@ -8,6 +8,7 @@
 
 import type { StaticMessageKey } from "@/lib/i18n";
 import { useI18n } from "@/lib/i18n/provider";
+import { signOutAction } from "@/lib/auth-actions";
 import { usePathname } from "next/navigation";
 
 const pageTitles: Record<string, StaticMessageKey> = {
@@ -64,22 +65,32 @@ export default function TopBar({
         <h1 className="truncate text-base font-semibold sm:text-lg">{t(title)}</h1>
       </div>
 
-      {instagramAccountCount > 0 ? (
-        <p className="shrink-0 truncate text-sm text-muted">
-          {instagramAccountCount > 1
-            ? t("{count} accounts", { count: instagramAccountCount })
-            : `@${instagramUsername}`}
-        </p>
-      ) : (
-        <a
-          href="/api/instagram/connect"
-          className="shrink-0 whitespace-nowrap text-sm font-medium px-3 py-1.5 rounded bg-accent text-white hover:bg-accent-hover"
-        >
-          {/* Full label needs more room than a 360px header has to spare. */}
-          <span className="sm:hidden">{t("Connect")}</span>
-          <span className="hidden sm:inline">{t("Connect Instagram")}</span>
-        </a>
-      )}
+      <div className="flex shrink-0 items-center gap-3">
+        {instagramAccountCount > 0 ? (
+          <p className="truncate text-sm text-muted">
+            {instagramAccountCount > 1
+              ? t("{count} accounts", { count: instagramAccountCount })
+              : `@${instagramUsername}`}
+          </p>
+        ) : (
+          <a
+            href="/api/instagram/connect"
+            className="whitespace-nowrap text-sm font-medium px-3 py-1.5 rounded bg-accent text-white hover:bg-accent-hover"
+          >
+            {/* Full label needs more room than a 360px header has to spare. */}
+            <span className="sm:hidden">{t("Connect")}</span>
+            <span className="hidden sm:inline">{t("Connect Instagram")}</span>
+          </a>
+        )}
+        <form action={signOutAction}>
+          <button
+            type="submit"
+            className="whitespace-nowrap text-sm px-2.5 py-1.5 rounded border border-border text-muted hover:text-foreground"
+          >
+            {t("Sign out")}
+          </button>
+        </form>
+      </div>
     </header>
   );
 }

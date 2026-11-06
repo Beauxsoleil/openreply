@@ -25,10 +25,20 @@ export async function POST(request: NextRequest) {
   const instagramAccountId =
     typeof body.instagramAccountId === "string" ? body.instagramAccountId : null;
 
+  // The account id is required: without it the delete below used to drop
+  // every account in the workspace, so a malformed client call wiped all
+  // connections. There is no bulk-disconnect; disconnect accounts one by one.
+  if (!instagramAccountId) {
+    return NextResponse.json(
+      { success: false, error: "instagramAccountId is required" },
+      { status: 400 }
+    );
+  }
+
   await prisma.instagramAccount.deleteMany({
     where: {
       workspaceId: context.workspaceId,
-      ...(instagramAccountId ? { id: instagramAccountId } : {}),
+      id: instagramAccountId,
     },
   });
 
