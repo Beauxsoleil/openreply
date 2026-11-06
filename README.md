@@ -99,7 +99,7 @@ Full environment variables and the production layout are in [docs/setup.md](docs
 
 - **Docker Compose (plain Docker, single server):** [docs/deploy-docker.md](docs/deploy-docker.md) — web + worker + cron + Postgres + Redis from `docker-compose.prod.yml`, with a `.env.production` file, TLS/reverse-proxy guidance, and backup/recovery.
 - **Dokploy:** [docs/deploy-dokploy.md](docs/deploy-dokploy.md) — two Applications (web + worker) plus Postgres/Redis services on your own Dokploy server.
-- **Vercel + Railway:** [docs/setup.md](docs/setup.md) — the recommended managed path, web app on Vercel and worker plus databases on Railway.
+- **Free split stack (recommended managed path):** [docs/deploy-split-stack.md](docs/deploy-split-stack.md) — web app on Vercel, Postgres on Neon, Redis on Upstash, worker on Render, all free tiers, with the full walkthrough in [docs/production.md](docs/production.md).
 
 Whichever path you pick, the instance needs a public HTTPS URL, PostgreSQL, Redis, a running worker, and email delivery for magic-link sign-in — and the web app and worker must share the same `DATABASE_URL`, `REDIS_URL`, and `ENCRYPTION_KEY`.
 
