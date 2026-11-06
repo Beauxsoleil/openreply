@@ -113,7 +113,7 @@ Copy `.env.example` to `.env` for local work, or set these in Vercel and Railway
 | Variable | What it is |
 | --- | --- |
 | `META_GRAPH_API_VERSION` | Graph API version, for example `v25.0`. |
-| `INSTAGRAM_APP_ID` | From the Meta app, see Step 6. |
+| `INSTAGRAM_APP_ID` | From the Meta app, see Step 5. |
 | `INSTAGRAM_APP_SECRET` | From the Meta app. |
 | `FACEBOOK_APP_SECRET` | From the Meta app. |
 | `WEBHOOK_VERIFY_TOKEN` | Any random string. You paste the same value into Meta's webhook config. |
