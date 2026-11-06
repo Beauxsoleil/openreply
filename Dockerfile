@@ -18,7 +18,7 @@
 # `@/lib/...` imports, because tsx has no tsconfig to resolve the alias
 # against, and no app/generated/prisma to import from).
 
-FROM node:20-slim AS build
+FROM node:20.19.0-slim AS build
 WORKDIR /app
 
 COPY package.json package-lock.json ./
@@ -29,7 +29,7 @@ COPY . .
 # generates app/generated/prisma AND compiles .next/ in one step.
 RUN npm run build
 
-FROM node:20-slim AS runner
+FROM node:20.19.0-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
@@ -51,6 +51,16 @@ COPY --from=build /app/prisma.config.ts ./prisma.config.ts
 COPY --from=build /app/next.config.ts ./next.config.ts
 COPY --from=build /app/tsconfig.json ./tsconfig.json
 COPY --from=build /app/package.json ./package.json
+
+# The app listens on 3000 and exposes /api/health (database, Redis, queue,
+# worker heartbeat). Compose/orchestrator health gating depends on this.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+  CMD wget -q -O /dev/null http://localhost:3000/api/health || exit 1
+
+# Run as the unprivileged node user. Next.js needs to write its runtime cache
+# under .next, so the app tree is owned by node.
+RUN chown -R node:node /app
+USER node
 
 EXPOSE 3000
 # Default to the web process — the worker service overrides this with

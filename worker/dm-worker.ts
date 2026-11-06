@@ -1,3 +1,10 @@
+// Load .env for local dev / Codespaces. dotenv silently does nothing when
+// no .env file exists (production platforms inject env vars), and it never
+// overrides variables already set in the environment. Without this, the
+// worker runs with no DATABASE_URL/REDIS_URL locally because tsx does not
+// load .env the way `next dev` does.
+import "dotenv/config";
+
 import { createDMWorker } from "@/lib/queue/dm-worker";
 import { recordWorkerHeartbeat } from "@/lib/ops/worker-health";
 import { reconcileComments } from "@/lib/polling/comment-reconciler";
