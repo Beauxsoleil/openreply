@@ -61,7 +61,7 @@ The web app receives the webhook and serves the dashboard. A separate worker pro
 
 ## Quick start
 
-1. **Choose your Instagram connection.** [Zernio](docs/zernio.md) is recommended if you want to avoid setting up your own Meta app. It is a paid service and sponsor, not a hosted OpenReply plan. Or follow the existing [direct Meta setup](docs/setup.md#the-meta-app).
+1. **Choose your Instagram connection.** [Zernio](docs/zernio.md) is recommended if you want to avoid setting up your own Meta app. It is a paid service and sponsor, not a hosted OpenReply plan. Or follow the existing [direct Meta setup](docs/setup.md#the-meta-app) — the standalone [Meta app guide](docs/meta-app.md) walks through the whole Meta console flow, from creating the app to App Review and the first test campaign.
 2. **Deploy the app and worker.** Both paths need PostgreSQL, Redis, a public HTTPS URL, and email delivery for magic-link sign-in.
 3. **Connect an Instagram Business or Creator account** in Settings, create a campaign, and test a keyword comment from another account.
 
