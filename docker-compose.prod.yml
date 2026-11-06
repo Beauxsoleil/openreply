@@ -1,0 +1,134 @@
+# OpenReply — Production Docker Compose
+#
+# The production stack: web app + worker + cron scheduler + Postgres + Redis.
+# All five services read their configuration from a single `.env.production`
+# file (see `.env.production.example` — copy it and fill it in first).
+#
+#   cp .env.production.example .env.production   # then edit the values
+#   docker compose -f docker-compose.prod.yml run --rm web npm run db:migrate
+#   docker compose -f docker-compose.prod.yml up -d
+#   curl http://localhost:3000/api/health
+#
+# Full runbook: docs/deploy-docker.md
+#
+# Notes:
+# - No secrets live in this file. Anything sensitive comes from
+#   `.env.production`, which is gitignored and never committed.
+# - The web service binds to 127.0.0.1 only. Put a reverse proxy
+#   (Caddy / Traefik / nginx) in front of it for public HTTPS — Meta
+#   requires a public HTTPS URL for webhooks and OAuth redirects. See
+#   docs/deploy-docker.md ("TLS and reverse proxy").
+# - The Dockerfile has no HEALTHCHECK of its own, so the web healthcheck
+#   is defined here, against /api/health. /api/health answers 200 only
+#   when the database, Redis, queue, and worker heartbeat are all healthy,
+#   and 503 otherwise — wget treats the 503 as a failure, which is what
+#   makes the healthcheck meaningful.
+# - `cron` runs scripts/cron.sh, which is a long-running loop (not a
+#   one-shot script): it calls attach-next-reel every 5 minutes and
+#   refresh-tokens + snapshot-followers once a day, then sleeps. That is
+#   why it is a service with `restart: unless-stopped`, not a scheduled
+#   `docker compose run`.
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: openreply:latest
+    command: ["npm", "run", "start"]
+    env_file:
+      - .env.production
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: openreply:latest
+    command: ["npm", "run", "worker"]
+    env_file:
+      - .env.production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  cron:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: openreply:latest
+    command: ["sh", "scripts/cron.sh"]
+    env_file:
+      - .env.production
+    environment:
+      # The scheduler calls the web app's /api/cron routes over the
+      # internal Compose network. CRON_SECRET comes from .env.production
+      # (the routes also accept NEXTAUTH_SECRET as a fallback).
+      CRON_BASE_URL: http://web:3000
+    depends_on:
+      web:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16
+    # POSTGRES_DB / POSTGRES_USER / POSTGRES_PASSWORD come from
+    # .env.production via env_file. They are deliberately NOT repeated
+    # here as ${POSTGRES_*} interpolations: Compose interpolates from the
+    # host shell, not from env_file, so a password set only in
+    # .env.production would be silently replaced by a default here while
+    # DATABASE_URL kept the real one — and the web app could never log in.
+    # Defaults (openreply / postgres / a password you set) live in
+    # .env.production.example; set POSTGRES_PASSWORD to a strong random
+    # value and keep DATABASE_URL in the same file in sync with it.
+    env_file:
+      - .env.production
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # CMD-SHELL expands $POSTGRES_USER inside the container, from the
+      # same env_file values the server itself runs with. The $$ escape
+      # is required: a single $ would be interpolated by Compose at parse
+      # time (from the host shell, where the variable is unset) and baked
+      # in as an empty string.
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\""]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    # --appendonly yes makes the queue durable across restarts: without it,
+    # a Redis restart loses every queued DM job.
+    command: ["redis-server", "--appendonly yes"]
+    env_file:
+      - .env.production
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:

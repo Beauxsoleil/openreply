@@ -1,5 +1,9 @@
 # OpenReply — Local Development Services
 # Run: docker-compose up -d
+#
+# Development only: this file starts Postgres and Redis for local work.
+# For a production deployment (web + worker + cron + Postgres + Redis),
+# use docker-compose.prod.yml and docs/deploy-docker.md instead.
 
 services:
   postgres:
