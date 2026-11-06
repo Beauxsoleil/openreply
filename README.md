@@ -21,6 +21,8 @@ OpenReply is free, MIT-licensed software running on your own infrastructure, wit
 > [openreply.diwen.dev](https://openreply.diwen.dev) is a demo of the dashboard, not a service you can sign up for. Creating an account there will never send a DM for you, and there is no hosted plan to upgrade to.
 >
 > A working instance needs your deployed fork, a public HTTPS URL, PostgreSQL, Redis, a running worker, and an Instagram connection. Choose optional paid Zernio or your own Meta app. [docs/setup.md](docs/setup.md) walks through all of it.
+>
+> To try the full comment → DM loop locally with no Instagram account and no real messages, use [demo mode](docs/demo.md): set `DEMO_MODE=1`, run `npm run db:seed-demo`, and simulate comments from a campaign page.
 
 > If this saves you a subscription or a weekend of building, a star on the repo genuinely helps other people find it.
 

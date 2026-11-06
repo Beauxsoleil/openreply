@@ -18,6 +18,7 @@ interface DmLog {
   commentText: string;
   status: string;
   errorMessage: string | null;
+  isDemo?: boolean;
   createdAt: string;
   automation: { name: string; keywords: string[] };
   instagramAccount: { username: string };
@@ -183,7 +184,14 @@ export default function LogsPage() {
                       <span className="text-muted">@{log.instagramAccount.username}</span>
                     </td>
                     <td className="px-4 py-4 sm:px-6">
-                      <StatusBadge status={log.status} />
+                      <span className="flex items-center gap-2">
+                        <StatusBadge status={log.status} />
+                        {log.isDemo && (
+                          <span className="rounded bg-amber-500/15 px-2 py-0.5 text-xs font-semibold text-amber-600">
+                            Demo
+                          </span>
+                        )}
+                      </span>
                     </td>
                     <td className="px-4 py-4 text-muted whitespace-nowrap sm:px-6">
                       {new Date(log.createdAt).toLocaleString(locale, {

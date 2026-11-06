@@ -3,6 +3,7 @@ import { getI18n } from "@/lib/i18n/server";
 import { redirect } from "next/navigation";
 import DashboardShell from "@/components/dashboard-shell";
 import { auth } from "@/lib/auth";
+import { isDemoMode } from "@/lib/env";
 import { prisma } from "@/lib/db/client";
 import { ensureWorkspaceForUser } from "@/lib/workspace";
 
@@ -39,6 +40,7 @@ export default async function DashboardLayout({
         workspaceName={workspace.name}
         instagramUsername={accounts[0]?.username ?? null}
         instagramAccountCount={accounts.length}
+        isDemoMode={isDemoMode()}
       >
         {children}
       </DashboardShell>
