@@ -1,11 +1,54 @@
 import { getMetaGraphApiVersion, requireEnv } from "@/lib/env";
 
+/**
+ * Which Graph API host an account's calls go to.
+ *
+ * - "instagram": Instagram Login (Business Login for Instagram) accounts.
+ *   The token is an Instagram user access token; API calls go to
+ *   graph.instagram.com with the `instagram_business_*` permissions.
+ * - "facebook": Unified Login (Facebook Login for Business) accounts. Meta
+ *   only offers Unified Login to newer apps, which have no Instagram App ID,
+ *   so the Instagram Login authorize flow cannot run for them. The token is
+ *   a never-expiring Business Integration system-user token; API calls go to
+ *   graph.facebook.com with the `instagram_*` permissions.
+ *
+ * Every function below takes the host as a trailing optional parameter
+ * defaulting to "instagram", so existing Instagram Login call sites keep
+ * working unchanged. Call sites that have the account row pass the
+ * account's host (see `InstagramContext.graphHost`); the default exists
+ * only so a missing host fails toward the historical behaviour, never
+ * toward sending a Unified Login token at the wrong host.
+ */
+export type MetaGraphHost = "instagram" | "facebook";
+
 function instagramGraphBase() {
   return `https://graph.instagram.com/${getMetaGraphApiVersion()}`;
 }
 
 function facebookGraphBase() {
   return `https://graph.facebook.com/${getMetaGraphApiVersion()}`;
+}
+
+function graphBaseFor(host: MetaGraphHost): string {
+  return host === "facebook" ? facebookGraphBase() : instagramGraphBase();
+}
+
+/**
+ * graph.facebook.com reads the account by its professional account ID, not
+ * by /me (a system-user token's /me is the system user). Callers that pass
+ * the facebook host must supply the ID; failing here, with the function
+ * named, is better than Meta's opaque "Unsupported request".
+ */
+function requireInstagramAccountId(
+  instagramAccountId: string | undefined,
+  fn: string
+): string {
+  if (!instagramAccountId) {
+    throw new Error(
+      `${fn} on graph.facebook.com requires an Instagram account ID`
+    );
+  }
+  return instagramAccountId;
 }
 
 export class MetaApiError extends Error {
@@ -72,6 +115,9 @@ export interface InstagramUser {
   id: string;
   // Instagram professional account ID. This — not `id` (the app-scoped ID) —
   // is what appears as entry.id in webhooks and is used by the messaging API.
+  // On graph.facebook.com there is no app-scoped `id`: the node's `id` is
+  // already the professional account ID, and getUserInfo fills `user_id`
+  // from it so callers read one shape from both hosts.
   user_id?: string;
   username: string;
   name?: string;
@@ -169,10 +215,11 @@ export async function sendPrivateReply(
   accessToken: string,
   instagramAccountId: string,
   commentId: string,
-  message: string
+  message: string,
+  host: MetaGraphHost = "instagram"
 ): Promise<{ recipient_id: string; message_id: string }> {
   const response = await fetch(
-    `${instagramGraphBase()}/${instagramAccountId}/messages`,
+    `${graphBaseFor(host)}/${instagramAccountId}/messages`,
     {
       method: "POST",
       headers: {
@@ -201,10 +248,11 @@ export async function sendPrivateReplyWithButton(
   commentId: string,
   text: string,
   buttonTitle: string,
-  payload: string
+  payload: string,
+  host: MetaGraphHost = "instagram"
 ): Promise<{ recipient_id: string; message_id: string }> {
   const response = await fetch(
-    `${instagramGraphBase()}/${instagramAccountId}/messages`,
+    `${graphBaseFor(host)}/${instagramAccountId}/messages`,
     {
       method: "POST",
       headers: {
@@ -244,10 +292,11 @@ export async function sendDirectMessageWithButton(
   userId: string,
   text: string,
   buttonTitle: string,
-  payload: string
+  payload: string,
+  host: MetaGraphHost = "instagram"
 ): Promise<{ recipient_id: string; message_id: string }> {
   const response = await fetch(
-    `${instagramGraphBase()}/${instagramAccountId}/messages`,
+    `${graphBaseFor(host)}/${instagramAccountId}/messages`,
     {
       method: "POST",
       headers: {
@@ -284,9 +333,10 @@ export async function sendDirectMessageWithButton(
  */
 export async function getUserFollowStatus(
   accessToken: string,
-  recipientId: string
+  recipientId: string,
+  host: MetaGraphHost = "instagram"
 ): Promise<boolean | null> {
-  const url = new URL(`${instagramGraphBase()}/${recipientId}`);
+  const url = new URL(`${graphBaseFor(host)}/${recipientId}`);
   url.searchParams.set("fields", "is_user_follow_business");
 
   try {
@@ -315,9 +365,10 @@ export async function getUserFollowStatus(
  */
 export async function getUserUsername(
   accessToken: string,
-  recipientId: string
+  recipientId: string,
+  host: MetaGraphHost = "instagram"
 ): Promise<string | null> {
-  const url = new URL(`${instagramGraphBase()}/${recipientId}`);
+  const url = new URL(`${graphBaseFor(host)}/${recipientId}`);
   url.searchParams.set("fields", "username");
 
   try {
@@ -360,10 +411,11 @@ export async function sendPrivateReplyWithLinkButton(
   instagramAccountId: string,
   commentId: string,
   text: string,
-  buttons: LinkButton[]
+  buttons: LinkButton[],
+  host: MetaGraphHost = "instagram"
 ): Promise<{ recipient_id: string; message_id: string }> {
   const response = await fetch(
-    `${instagramGraphBase()}/${instagramAccountId}/messages`,
+    `${graphBaseFor(host)}/${instagramAccountId}/messages`,
     {
       method: "POST",
       headers: {
@@ -397,10 +449,11 @@ export async function sendDirectMessage(
   accessToken: string,
   instagramAccountId: string,
   userId: string,
-  message: string
+  message: string,
+  host: MetaGraphHost = "instagram"
 ): Promise<{ recipient_id: string; message_id: string }> {
   const response = await fetch(
-    `${instagramGraphBase()}/${instagramAccountId}/messages`,
+    `${graphBaseFor(host)}/${instagramAccountId}/messages`,
     {
       method: "POST",
       headers: {
@@ -426,10 +479,11 @@ export async function sendDirectMessageWithLinkButton(
   instagramAccountId: string,
   userId: string,
   text: string,
-  buttons: LinkButton[]
+  buttons: LinkButton[],
+  host: MetaGraphHost = "instagram"
 ): Promise<{ recipient_id: string; message_id: string }> {
   const response = await fetch(
-    `${instagramGraphBase()}/${instagramAccountId}/messages`,
+    `${graphBaseFor(host)}/${instagramAccountId}/messages`,
     {
       method: "POST",
       headers: {
@@ -458,10 +512,11 @@ export async function sendDirectMessageWithLinkButton(
 export async function sendCommentReply(
   accessToken: string,
   commentId: string,
-  message: string
+  message: string,
+  host: MetaGraphHost = "instagram"
 ): Promise<{ id: string }> {
   const response = await fetch(
-    `${instagramGraphBase()}/${commentId}/replies`,
+    `${graphBaseFor(host)}/${commentId}/replies`,
     {
       method: "POST",
       headers: {
@@ -477,9 +532,10 @@ export async function sendCommentReply(
 
 export async function getMediaComments(
   accessToken: string,
-  mediaId: string
+  mediaId: string,
+  host: MetaGraphHost = "instagram"
 ): Promise<InstagramComment[]> {
-  const url = new URL(`${instagramGraphBase()}/${mediaId}/comments`);
+  const url = new URL(`${graphBaseFor(host)}/${mediaId}/comments`);
   url.searchParams.set("fields", "id,text,from,timestamp");
   url.searchParams.set("access_token", accessToken);
 
@@ -503,11 +559,12 @@ export async function getRecentMediaComments(
   accessToken: string,
   mediaId: string,
   sinceMs: number,
-  max = 800
+  max = 800,
+  host: MetaGraphHost = "instagram"
 ): Promise<InstagramComment[]> {
   const results: InstagramComment[] = [];
 
-  const first = new URL(`${instagramGraphBase()}/${mediaId}/comments`);
+  const first = new URL(`${graphBaseFor(host)}/${mediaId}/comments`);
   first.searchParams.set("fields", "id,text,timestamp,from,replies{from}");
   first.searchParams.set("order", "reverse_chronological");
   first.searchParams.set("limit", "50");
@@ -570,7 +627,8 @@ export interface InstagramConversation {
  */
 export async function getConversations(
   accessToken: string,
-  igUserId: string
+  igUserId: string,
+  host: MetaGraphHost = "instagram"
 ): Promise<InstagramConversation[]> {
   const fields =
     "participants,updated_time,messages.limit(1){message,from,created_time}";
@@ -587,7 +645,7 @@ export async function getConversations(
   async function readPage(limit: number, requestedFields: string): Promise<Page> {
     // Never follow Meta's next URL: rebuild on our trusted host and carry the
     // token separately. A messages.paging cursor must never advance this list.
-    const url = new URL(`${instagramGraphBase()}/${igUserId}/conversations`);
+    const url = new URL(`${graphBaseFor(host)}/${igUserId}/conversations`);
     url.searchParams.set("platform", "instagram");
     url.searchParams.set("fields", requestedFields);
     url.searchParams.set("limit", String(limit));
@@ -655,9 +713,10 @@ export async function getConversations(
  */
 export async function getConversationMessages(
   accessToken: string,
-  conversationId: string
+  conversationId: string,
+  host: MetaGraphHost = "instagram"
 ): Promise<InstagramMessage[]> {
-  const url = new URL(`${instagramGraphBase()}/${conversationId}`);
+  const url = new URL(`${graphBaseFor(host)}/${conversationId}`);
   url.searchParams.set("fields", "messages{id,created_time,from,to,message}");
   url.searchParams.set("access_token", accessToken);
 
@@ -681,8 +740,37 @@ export function isProfessionalInstagramAccount(
   return user.account_type !== "PERSONAL";
 }
 
-export async function getUserInfo(accessToken: string): Promise<InstagramUser> {
-  const url = new URL(`${instagramGraphBase()}/me`);
+/**
+ * The connected account's profile.
+ *
+ * On graph.instagram.com this reads /me, which is the Instagram account.
+ * On graph.facebook.com a system-user token's /me is the system user, not
+ * the Instagram account, so the account is read by its professional
+ * account ID instead (and `instagramAccountId` is required). On that host
+ * the node's `id` IS the professional account ID — the same value webhooks
+ * carry as entry.id — and there is no separate `user_id` field, so it is
+ * filled in from `id` for callers that read it.
+ */
+export async function getUserInfo(
+  accessToken: string,
+  instagramAccountId?: string,
+  host: MetaGraphHost = "instagram"
+): Promise<InstagramUser> {
+  if (host === "facebook") {
+    const id = requireInstagramAccountId(instagramAccountId, "getUserInfo");
+    const url = new URL(`${graphBaseFor(host)}/${id}`);
+    url.searchParams.set(
+      "fields",
+      "id,username,name,profile_picture_url,followers_count,account_type"
+    );
+    url.searchParams.set("access_token", accessToken);
+
+    const response = await fetch(url.toString());
+    const user = await handleResponse<InstagramUser>(response);
+    return { ...user, user_id: user.user_id ?? user.id };
+  }
+
+  const url = new URL(`${graphBaseFor(host)}/me`);
   url.searchParams.set(
     "fields",
     "id,user_id,username,name,profile_picture_url,followers_count,account_type"
@@ -701,9 +789,17 @@ const MEDIA_PAGE_SIZE = 100;
 
 export async function getUserMedia(
   accessToken: string,
-  limit = 25
+  limit = 25,
+  instagramAccountId?: string,
+  host: MetaGraphHost = "instagram"
 ): Promise<InstagramMedia[]> {
-  const url = new URL(`${instagramGraphBase()}/me/media`);
+  // /me/media is Instagram Login only: a system-user token's /me is the
+  // system user, so Unified Login accounts read /{ig-user-id}/media.
+  const mediaPath =
+    host === "facebook"
+      ? `${requireInstagramAccountId(instagramAccountId, "getUserMedia")}/media`
+      : "me/media";
+  const url = new URL(`${graphBaseFor(host)}/${mediaPath}`);
   url.searchParams.set("fields", MEDIA_FIELDS);
   url.searchParams.set("limit", limit.toString());
   url.searchParams.set("access_token", accessToken);
@@ -721,11 +817,17 @@ export async function getUserMedia(
  */
 export async function getAllUserMedia(
   accessToken: string,
-  max = 500
+  max = 500,
+  instagramAccountId?: string,
+  host: MetaGraphHost = "instagram"
 ): Promise<InstagramMedia[]> {
   const results: InstagramMedia[] = [];
 
-  const first = new URL(`${instagramGraphBase()}/me/media`);
+  const mediaPath =
+    host === "facebook"
+      ? `${requireInstagramAccountId(instagramAccountId, "getAllUserMedia")}/media`
+      : "me/media";
+  const first = new URL(`${graphBaseFor(host)}/${mediaPath}`);
   first.searchParams.set("fields", MEDIA_FIELDS);
   first.searchParams.set("limit", String(Math.min(MEDIA_PAGE_SIZE, max)));
   first.searchParams.set("access_token", accessToken);
@@ -748,31 +850,46 @@ export async function getAllUserMedia(
 /**
  * Fetch per-media insight metrics (views, reach, saved, shares, etc.).
  *
- * Requires the `instagram_business_manage_insights` permission — accounts
- * connected before that scope was requested will throw a PermissionError.
- * Metric validity varies by media type, so pass only metrics that apply to
- * the given media (e.g. `views` is not valid for image posts on some accounts).
+ * Requires the insights permission — `instagram_business_manage_insights`
+ * on Instagram Login, `instagram_manage_insights` on Unified Login —
+ * accounts connected before that scope was requested will throw a
+ * PermissionError. Metric validity varies by media type, so pass only
+ * metrics that apply to the given media (e.g. `views` is not valid for
+ * image posts on some accounts).
+ *
+ * Unified Login exception: a configuration without the insights permission
+ * is possible (it is editable after creation), so a PermissionError on the
+ * facebook host degrades to an empty result instead of breaking the
+ * dashboard — the overview page already renders "no insights" for empty.
+ * The instagram host keeps throwing so the overview page can surface its
+ * permission-denied notice, as before.
  */
 export async function getMediaInsights(
   accessToken: string,
   mediaId: string,
-  metrics: string[]
+  metrics: string[],
+  host: MetaGraphHost = "instagram"
 ): Promise<InstagramMediaInsights> {
-  const url = new URL(`${instagramGraphBase()}/${mediaId}/insights`);
+  const url = new URL(`${graphBaseFor(host)}/${mediaId}/insights`);
   url.searchParams.set("metric", metrics.join(","));
   url.searchParams.set("access_token", accessToken);
 
-  const response = await fetch(url.toString());
-  const data = await handleResponse<{
-    data: Array<{ name: string; values: Array<{ value: number }> }>;
-  }>(response);
+  try {
+    const response = await fetch(url.toString());
+    const data = await handleResponse<{
+      data: Array<{ name: string; values: Array<{ value: number }> }>;
+    }>(response);
 
-  const result: InstagramMediaInsights = {};
-  for (const entry of data.data) {
-    result[entry.name as keyof InstagramMediaInsights] =
-      entry.values?.[0]?.value ?? 0;
+    const result: InstagramMediaInsights = {};
+    for (const entry of data.data) {
+      result[entry.name as keyof InstagramMediaInsights] =
+        entry.values?.[0]?.value ?? 0;
+    }
+    return result;
+  } catch (err) {
+    if (host === "facebook" && err instanceof PermissionError) return {};
+    throw err;
   }
-  return result;
 }
 
 /** One day of net follower change, as reported by account insights. */
@@ -790,11 +907,17 @@ const FOLLOWER_INSIGHT_MAX_DAYS = 30;
 /**
  * Fetch the daily net follower change for an account.
  *
- * Requires `instagram_business_manage_insights`. Note this metric is *not*
- * universally available: Instagram omits it for accounts under 100 followers
- * and it is unsupported on some account types. Callers must treat `null` as
- * "no series available" rather than an error — see the backfill in
- * `lib/reports/follower-history.ts`.
+ * Requires the insights permission — `instagram_business_manage_insights`
+ * on Instagram Login, `instagram_manage_insights` on Unified Login. Note
+ * this metric is *not* universally available: Instagram omits it for
+ * accounts under 100 followers and it is unsupported on some account
+ * types. Callers must treat `null` as "no series available" rather than
+ * an error — see the backfill in `lib/reports/follower-history.ts`.
+ *
+ * As with getMediaInsights, a PermissionError on the facebook host
+ * degrades to `null` (a Unified Login configuration may not include the
+ * insights permission); on the instagram host it is rethrown so callers
+ * can surface it, as before.
  *
  * Returns daily deltas, not running totals. Reconstruct absolute counts by
  * anchoring on a known `followers_count` and walking backwards.
@@ -802,13 +925,14 @@ const FOLLOWER_INSIGHT_MAX_DAYS = 30;
 export async function getFollowerCountSeries(
   accessToken: string,
   instagramAccountId: string,
-  days: number = FOLLOWER_INSIGHT_MAX_DAYS
+  days: number = FOLLOWER_INSIGHT_MAX_DAYS,
+  host: MetaGraphHost = "instagram"
 ): Promise<FollowerCountPoint[] | null> {
   const span = Math.min(Math.max(days, 1), FOLLOWER_INSIGHT_MAX_DAYS);
   const until = Math.floor(Date.now() / 1000);
   const since = until - (span - 1) * 86_400;
 
-  const url = new URL(`${instagramGraphBase()}/${instagramAccountId}/insights`);
+  const url = new URL(`${graphBaseFor(host)}/${instagramAccountId}/insights`);
   url.searchParams.set("metric", "follower_count");
   url.searchParams.set("period", "day");
   url.searchParams.set("since", String(since));
@@ -834,7 +958,10 @@ export async function getFollowerCountSeries(
   } catch (err) {
     // A missing permission is a real signal the caller may want to surface;
     // anything else here means the metric is simply unavailable for this
-    // account, which is not worth failing the whole dashboard over.
+    // account, which is not worth failing the whole dashboard over. On the
+    // facebook host a missing insights permission degrades to null instead
+    // (see getMediaInsights).
+    if (host === "facebook" && err instanceof PermissionError) return null;
     if (err instanceof PermissionError) throw err;
     console.warn(
       "[Instagram] follower_count insights unavailable:",
@@ -844,6 +971,10 @@ export async function getFollowerCountSeries(
   }
 }
 
+// Instagram Login only: exchanging and refreshing the 60-day user token
+// at graph.instagram.com. Unified Login system-user tokens never expire
+// and have no exchange/refresh endpoint — nothing may call these for a
+// Unified Login account (see refreshInstagramAccountToken).
 export async function getLongLivedToken(
   shortLivedToken: string
 ): Promise<{ accessToken: string; expiresIn: number }> {
@@ -879,10 +1010,11 @@ export async function refreshLongLivedToken(
 
 export async function subscribeInstagramAccountToWebhooks(
   instagramAccountId: string,
-  accessToken: string
+  accessToken: string,
+  host: MetaGraphHost = "instagram"
 ): Promise<{ success: boolean }> {
   const response = await fetch(
-    `${instagramGraphBase()}/${instagramAccountId}/subscribed_apps`,
+    `${graphBaseFor(host)}/${instagramAccountId}/subscribed_apps`,
     {
       method: "POST",
       headers: {
@@ -898,8 +1030,37 @@ export async function subscribeInstagramAccountToWebhooks(
   return handleResponse(response);
 }
 
+/**
+ * The Instagram accounts a Unified Login system-user token can act on.
+ *
+ * A system-user token's /me is the system user, not an Instagram account,
+ * so the accounts are listed through this edge instead. Each entry is the
+ * account's professional account ID — the same ID webhooks carry as
+ * entry.id and the ID every other graph.facebook.com call takes — plus its
+ * username. Needs `instagram_basic`, which the Unified Login configuration
+ * always includes.
+ *
+ * One token can cover several accounts; the caller picks one (or asks the
+ * user to) and stores that account's ID as the row's instagramId.
+ */
+export async function listAssignedInstagramAccounts(
+  accessToken: string
+): Promise<Array<{ id: string; username: string }>> {
+  const url = new URL(
+    `${facebookGraphBase()}/me/assigned_instagram_accounts`
+  );
+  url.searchParams.set("fields", "id,username");
+  url.searchParams.set("access_token", accessToken);
+
+  const response = await fetch(url.toString());
+  const data = await handleResponse<{
+    data: Array<{ id: string; username: string }>;
+  }>(response);
+  return data.data ?? [];
+}
+
 export async function debugToken(inputToken: string, accessToken: string) {
-  const url = new URL(`${facebookGraphBase()}/debug_token`);
+  const url = new URL(`${graphBaseFor("facebook")}/debug_token`);
   url.searchParams.set("input_token", inputToken);
   url.searchParams.set("access_token", accessToken);
   const response = await fetch(url.toString());

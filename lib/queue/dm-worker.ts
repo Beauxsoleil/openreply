@@ -207,8 +207,11 @@ async function sendWithTokenRefresh<T>(args: {
     );
     try {
       const refreshed = await refreshInstagramAccountToken(args.account);
+      // Keep the original context's host and account id: the refreshed
+      // token belongs to the same account, and a Unified Login account
+      // must never be retried against graph.instagram.com.
       return await args.send({
-        provider: "META",
+        ...args.context,
         accessToken: refreshed.accessToken,
       });
     } catch (refreshError) {

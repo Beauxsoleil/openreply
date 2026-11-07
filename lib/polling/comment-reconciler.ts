@@ -89,6 +89,7 @@ export async function reconcileComments(): Promise<void> {
           provider: true,
           workspaceId: true,
           zernioAccountId: true,
+          isUnifiedLogin: true,
         },
       },
     },
