@@ -1,27 +1,26 @@
 @import "tailwindcss";
 
-/* ManyChat Alternative — Design System
-   Plain and functional. No gradients, glass, glow, or animation. */
-
+/* OpenReply — Obsidian & Ember design foundation.
+   Semantic Tailwind tokens preserve existing component behavior. */
 @theme inline {
-  --color-background: #ffffff;
-  --color-foreground: #18181b;
-  --color-surface: #f7f7f8;
-  --color-surface-hover: #efeff1;
-  --color-border: #e4e4e7;
-  --color-border-hover: #d4d4d8;
-  --color-muted: #71717a;
-  --color-accent: #f97316;
-  --color-accent-hover: #ea580c;
-  --color-success: #16a34a;
-  --color-error: #dc2626;
-  --color-warning: #d97706;
+  --color-background: #0B0C10;
+  --color-foreground: #F7F3F0;
+  --color-surface: #191A20;
+  --color-surface-hover: #24252D;
+  --color-border: #303038;
+  --color-border-hover: #49434A;
+  --color-muted: #ADA7B0;
+  --color-accent: #C04A38;
+  --color-accent-hover: #E36B28;
+  --color-success: #34D399;
+  --color-error: #FB7185;
+  --color-warning: #F5B942;
   --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, monospace;
 }
 
 html {
-  color-scheme: light;
+  color-scheme: dark;
 }
 
 body {
