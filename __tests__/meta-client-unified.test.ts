@@ -89,6 +89,29 @@ describe("Unified Login host parameterization", () => {
     expect(user.username).toBe("beaux_viola");
   });
 
+  it("does not request account_type on graph.facebook.com", async () => {
+    const seen = stubFetch(() =>
+      okJson({
+        id: "17841404707268563",
+        username: "beaux_viola",
+        name: "Joel Viola",
+        followers_count: 472,
+      })
+    );
+
+    const user = await getUserInfo("suat", "17841404707268563", "facebook");
+
+    // account_type is not a field on the Instagram node in Meta's
+    // Facebook Graph API: requesting it fails the whole read with (#100)
+    // "Tried accessing nonexisting field (account_type)" — which is what
+    // rejected a valid Unified Login token on 2026-11-06. The
+    // professional-account check fails open when the field is absent.
+    expect(seen[0].url).not.toContain("account_type");
+    expect(user.username).toBe("beaux_viola");
+    expect(user.followers_count).toBe(472);
+    expect(user.account_type).toBeUndefined();
+  });
+
   it("refuses getUserInfo on graph.facebook.com without an account ID", async () => {
     const seen = stubFetch(() => okJson({}));
 
