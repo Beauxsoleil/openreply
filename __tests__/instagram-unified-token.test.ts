@@ -224,6 +224,28 @@ describe("POST /api/instagram/unified-token", () => {
     expect(state.upsert).not.toHaveBeenCalled();
   });
 
+  it("connects when Meta returns no account_type (fails open)", async () => {
+    // graph.facebook.com's Instagram node has no account_type field, so
+    // getUserInfo on the facebook host never returns one. The connect
+    // must still succeed: the professional-account check fails open on
+    // an absent account_type, and Unified Login only issues tokens for
+    // professional accounts.
+    state.getUserInfo.mockResolvedValue({
+      id: IG_ID,
+      user_id: IG_ID,
+      username: "beaux_viola",
+      name: "Joel Viola",
+      followers_count: 472,
+    });
+
+    const response = await POST(request({ token: TOKEN }));
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.success).toBe(true);
+    expect(state.upsert).toHaveBeenCalled();
+  });
+
   it("rejects an account already connected elsewhere", async () => {
     state.canConnect.mockResolvedValue({
       allowed: false,

@@ -29,10 +29,13 @@ import {
  *
  * The token is verified before anything is stored: it is used to list the
  * Instagram accounts it covers on graph.facebook.com, the account is
- * resolved (username, account_type) and personal accounts are rejected
- * with the same rule as the Instagram Login callback, then the account is
- * subscribed to webhooks and the token is stored encrypted with the
- * workspace's existing ENCRYPTION_KEY.
+ * resolved (username, follower count) and the professional-account rule
+ * from the Instagram Login callback is applied — with account_type
+ * absent on this host (it is not a field on graph.facebook.com's
+ * Instagram node; see getUserInfo), the check fails open, which is safe
+ * because Unified Login only issues tokens for professional accounts.
+ * Then the account is subscribed to webhooks and the token is stored
+ * encrypted with the workspace's existing ENCRYPTION_KEY.
  *
  * The token is write-only: it is never logged, never returned in a
  * response, and the Settings form clears the input after submit. A
@@ -153,11 +156,13 @@ export async function POST(request: NextRequest) {
       chosen = assigned[0];
     }
 
-    // Resolve the account on graph.facebook.com: username, follower count
-    // and, critically, account_type. The ID stored here is the Instagram
-    // professional account ID (the same value webhooks carry as entry.id);
-    // the Instagram internal user_igid is a different number and is never
-    // used by the Graph API.
+    // Resolve the account on graph.facebook.com: username and follower
+    // count. account_type is deliberately NOT requested: it is not a
+    // field on this host's Instagram node, and asking for it fails the
+    // whole read with (#100) — see getUserInfo. The ID stored here is
+    // the Instagram professional account ID (the same value webhooks
+    // carry as entry.id); the Instagram internal user_igid is a
+    // different number and is never used by the Graph API.
     const userInfo = await getUserInfo(trimmedToken, chosen.id, "facebook");
 
     if (!isProfessionalInstagramAccount(userInfo)) {

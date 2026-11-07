@@ -758,12 +758,15 @@ and never shows it back.
 
 Before anything is stored, OpenReply verifies the token on
 `graph.facebook.com`: it lists the Instagram accounts the token covers,
-resolves the account (username, account type), and rejects personal
-accounts with the same rule as the Instagram Login callback — switch the
-account to Business or Creator first, then reconnect. It also subscribes
-the account to the `comments` and `messages` webhooks. On success the
-account appears in Settings marked **Connected via Unified Login** with
-**Token never expires**.
+resolves the account (username, follower count), and applies the
+professional-account rule — `account_type` is not a field on
+`graph.facebook.com`'s Instagram node, so it is not requested there
+(asking for it fails the whole read with Meta error #100, which is what
+rejected a valid token on 2026-11-06 before the fix). Unified Login only
+issues tokens for professional accounts, so no check is lost. It also
+subscribes the account to the `comments` and `messages` webhooks. On
+success the account appears in Settings marked **Connected via Unified
+Login** with **Token never expires**.
 
 If the token covers more than one Instagram account, the form asks you to
 pick one from a dropdown and submit again — one token can cover several
@@ -800,7 +803,7 @@ test send but never reach OpenReply, check this switch first.
 
 | Symptom | Likely cause | Fix |
 | --- | --- | --- |
-| "Meta rejected the token" in Settings | Token was generated for a different app, revoked, or copied with a typo | Generate a fresh token from Section 13.3 for this app and paste it again. Check for a leading/trailing space. |
+| "Meta rejected the token" in Settings | Token was generated for a different app, revoked, or copied with a typo. Before the Nov 6 fix, a second cause was OpenReply itself: its account read requested `account_type`, which `graph.facebook.com` does not have — Meta answered (#100) and the route reported it as a rejected token. | Generate a fresh token from Section 13.3 for this app and paste it again. Check for a leading/trailing space. If the error persists on a current build, check the Diagnostics page for the exact Meta error and the request path. |
 | "This Instagram account is a personal account" | The account is still personal | Switch it to Business or Creator in Instagram → Settings → Account type, then reconnect. |
 | "This token is not linked to any Instagram account" | The token was generated before the account was shared with the configuration's business portfolio | In Meta Business Suite, share the Instagram account with the portfolio, then generate a fresh token. |
 | Token accepted, but no comment ever arrives | Webhook Subscription switch off, or webhook fields unsubscribed | Section 13.5, then Section 6: subscribe to `comments` and `messages`. Use the console Test → Send to My Server to confirm delivery. |

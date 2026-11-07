@@ -759,9 +759,19 @@ export async function getUserInfo(
   if (host === "facebook") {
     const id = requireInstagramAccountId(instagramAccountId, "getUserInfo");
     const url = new URL(`${graphBaseFor(host)}/${id}`);
+    // Do NOT request account_type here: it is not a field on the Instagram
+    // node in Meta's Facebook Graph API, and asking for it fails the whole
+    // call with (#100) "Tried accessing nonexisting field (account_type)".
+    // That is what rejected a valid Unified Login token on 2026-11-06: the
+    // token was fine, this field list was not (verified live against
+    // v25.0 — the same read succeeds without account_type). The field
+    // exists on graph.instagram.com's /me, so the instagram host below
+    // keeps requesting it. The professional-account check fails open on an
+    // absent account_type, and Unified Login only issues tokens for
+    // professional accounts, so nothing is lost by omitting it.
     url.searchParams.set(
       "fields",
-      "id,username,name,profile_picture_url,followers_count,account_type"
+      "id,username,name,profile_picture_url,followers_count"
     );
     url.searchParams.set("access_token", accessToken);
 
