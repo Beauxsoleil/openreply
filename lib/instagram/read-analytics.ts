@@ -10,7 +10,11 @@ export async function getUserFollowStatus({
   recipientId: string;
 }): Promise<boolean | null> {
   if (context.provider === "META")
-    return meta.getUserFollowStatus(context.accessToken, recipientId);
+    return meta.getUserFollowStatus(
+      context.accessToken,
+      recipientId,
+      context.graphHost
+    );
   try {
     const result = await zernioRequest<{ isFollower: boolean | null }>({
       apiKey: context.apiKey,
@@ -34,7 +38,11 @@ export async function getRecipientUsername({
   recipientId: string;
 }): Promise<string | null> {
   if (context.provider === "META")
-    return meta.getUserUsername(context.accessToken, recipientId);
+    return meta.getUserUsername(
+      context.accessToken,
+      recipientId,
+      context.graphHost
+    );
   return null;
 }
 
@@ -48,7 +56,12 @@ export async function getMediaInsights({
   metrics: string[];
 }): Promise<meta.InstagramMediaInsights> {
   if (context.provider === "META")
-    return meta.getMediaInsights(context.accessToken, mediaId, metrics);
+    return meta.getMediaInsights(
+      context.accessToken,
+      mediaId,
+      metrics,
+      context.graphHost
+    );
   const result = await zernioRequest<{
     platformAnalytics?: {
       platformPostId: string;
@@ -91,7 +104,12 @@ export async function getFollowerCountSeries({
   igUserId: string;
 }): Promise<meta.FollowerCountPoint[] | null> {
   if (context.provider === "META")
-    return meta.getFollowerCountSeries(context.accessToken, igUserId);
+    return meta.getFollowerCountSeries(
+      context.accessToken,
+      igUserId,
+      undefined,
+      context.graphHost
+    );
   return null;
 }
 

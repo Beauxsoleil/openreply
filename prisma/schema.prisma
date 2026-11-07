@@ -152,6 +152,11 @@ model InstagramAccount {
   accessToken       String
   tokenExpiresAt    DateTime?
   webhookSubscribed Boolean  @default(false)
+  /// Unified Login (Facebook Login for Business) accounts call
+  /// graph.facebook.com with a never-expiring system-user token; Instagram
+  /// Login accounts call graph.instagram.com with a 60-day user token.
+  /// System-user tokens are never refreshed. See docs/meta-app.md.
+  isUnifiedLogin    Boolean  @default(false)
   /// Demo-mode fixture account: carries no real credential (its token is
   /// DEMO_NO_REAL_TOKEN) and must never send a real DM. See lib/demo.ts.
   isDemo            Boolean  @default(false)

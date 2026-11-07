@@ -47,6 +47,7 @@ export async function GET(request: NextRequest) {
       username: true,
       provider: true,
       accessToken: true,
+      isUnifiedLogin: true,
     },
   });
 

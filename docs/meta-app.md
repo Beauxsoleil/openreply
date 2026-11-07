@@ -13,6 +13,13 @@ self-hosted either way.
 > Skip it otherwise — it is the slowest part of this whole process, and
 > running your own instance for your own accounts never needs it.
 
+> **Newer Meta apps only offer Unified Login.** If your app's Instagram
+> product shows "API setup with Unified login" and there is no Instagram
+> App ID anywhere, the Instagram Login flow in Sections 3–5 and 9.2 cannot
+> work for it — skip to **Section 13**, which covers the Unified Login
+> path (a system-user token pasted into Settings instead of an OAuth
+> redirect).
+
 > **Meta renames its menus often.** The button and menu names below matched
 > Meta's console when this guide was written. If a screen looks different,
 > follow the *intent* of the step (add the Instagram product, register a
@@ -98,6 +105,13 @@ Your new app does not have Instagram in it yet. Add it:
 3. In the left sidebar, open the Instagram product and select **API setup
    with Instagram login**. (The exact label varies — it may read "API Setup
    with Instagram Login".)
+
+> **If step 3 only offers "API setup with Unified login"**, your app is a
+> newer one and Meta does not issue it an Instagram App ID at all. Do not
+> try to force the Instagram Login flow — the authorize URL fails with
+> "Invalid platform app". Use **Section 13** (Unified Login) instead of
+> Sections 3–5 and 9.2. Sections 1, 6 (webhooks), 7 (publishing), 9.1
+> (testers), and 10 still apply as written.
 
 This is the step first-timers stall on: if you cannot find any Instagram
 settings in the app, the product has not been added yet. Go back to **Add
@@ -482,6 +496,10 @@ never invited (Section 7).
 
 ### 9.2 The in-app connect flow
 
+> **Unified Login apps:** if your app has no Instagram App ID, this
+> OAuth flow cannot run — use the token-paste flow in **Section 13**
+> instead of the steps below.
+
 1. Sign in to OpenReply as a workspace owner or admin.
 2. Go to **Settings**. Under the Instagram accounts section, click
    **Connect using your own Meta app**. (The Overview page has a Connect
@@ -655,9 +673,135 @@ automatically.
 | DM toggle ("also reply when someone DMs these words") never fires | Subscribed to `comments` only | Section 6: subscribe to the `messages` webhook field as well. |
 | Connect button does nothing / `instagram=misconfigured` | A Meta env var is missing on the server | Section 4: set `INSTAGRAM_APP_ID`, `INSTAGRAM_APP_SECRET`, `FACEBOOK_APP_SECRET`, and `WEBHOOK_VERIFY_TOKEN`, then redeploy/restart. The `missing=` parameter names the missing one. |
 | "App is still in Development mode" / strangers cannot connect | App not published, or no Advanced Access | Publish the app (Section 7) for your own tester accounts. Strangers need App Review granting Advanced Access (Section 8) — publishing alone does not widen who the permissions apply to. |
+| "Invalid Request: Request parameters are invalid: Invalid platform app" when connecting | The app has no Instagram App ID — it is a newer app that only offers Unified Login, and the Instagram Login authorize URL cannot work for it | Section 13: use the Unified Login path (configuration + system-user token pasted into Settings). Do not try to fix the authorize URL. |
 | Public reply posts but the DM never arrives, or vice versa | The two sends fail independently | Check DM Logs: public replies and private DMs track their outcomes separately. Fix the failing one from its error text; the other working does not prove the webhook or token is fine. |
 
 Still stuck? Open an issue with the symptom, the exact error text from DM
 Logs or Diagnostics, and which row of this table you already tried — that is
 where everyone loses time, and a documented quirk is worth as much as a code
 fix.
+
+## 13. Unified Login (newer Meta apps)
+
+Meta stopped issuing Instagram App IDs to newer apps. If your app's
+Instagram product only offers **"API setup with Unified login"** and there
+is no Instagram App ID anywhere in the console (not under the Instagram
+product, not on App Settings → Basic), the Instagram Login flow in
+Sections 3–5 and 9.2 cannot work for it: the authorize URL fails with
+"Invalid platform app", because there is no Instagram app to authorize
+against. Use this section instead. Everything else in this guide still
+applies: the webhook in Section 6, publishing in Section 7, testers in
+Section 9.1, and the campaign test in Section 10.
+
+How it differs, in one paragraph: instead of an OAuth redirect that
+exchanges a code for a 60-day user token, Meta's Unified Login
+configuration issues a **system-user access token** for the Instagram
+account — it never expires, so OpenReply never refreshes it. You paste
+that token into Settings, OpenReply verifies it against
+`graph.facebook.com`, and all API calls for that account go to
+`graph.facebook.com` instead of `graph.instagram.com`. OpenReply never
+publishes media, so the configuration's publishing permission is not
+needed.
+
+### 13.1 Create the Unified Login configuration
+
+1. In your app's dashboard, open the Instagram product (Use Cases →
+   Customize) and find **API setup with Unified login**.
+2. Under **1. Configure your app**, click **Create new configuration**.
+   Meta creates a Facebook Login for Business configuration named
+   "Instagram API (Unified Login)". This is the fixed template — you
+   cannot change its name or type, but you **can** edit its permissions
+   afterwards (next step).
+3. The configuration needs a business portfolio. Pick one of your existing
+   portfolios, or create a new one. A portfolio does not have to be
+   verified to connect your own accounts; verification is only required
+   before App Review (Section 8).
+
+### 13.2 Fix the configuration's permissions
+
+The template ships with permissions OpenReply does not need, and misses
+one it does use. After creating the configuration, open it and edit the
+permissions to this final set:
+
+| Permission | Why |
+| --- | --- |
+| `instagram_basic` | Read the account profile and media (locked — cannot be removed) |
+| `instagram_manage_messages` | Send and read DMs (locked — cannot be removed) |
+| `instagram_manage_comments` | Read comments and post public replies |
+| `instagram_manage_insights` | Follower counts and per-media insights for the dashboard |
+
+Remove `ads_management` and `ads_read` (they come with the template;
+OpenReply runs no ads). Do **not** add `instagram_content_publish` —
+OpenReply never publishes media, so it is not requested. If
+`instagram_manage_insights` is missing, the dashboard still works:
+insights show as unavailable instead of breaking the page.
+
+### 13.3 Generate the token
+
+Under **2. Generate access tokens** on the same page, find your Instagram
+account and click **Generate token**. This issues the system-user token
+for that account. Copy it immediately — Meta shows it once.
+
+Treat it like a password: it never expires, so anyone holding it can act
+as the account until it is revoked in Meta's console. Never paste it into
+a chat, a screenshot, or a support ticket. OpenReply stores it encrypted
+and never shows it back.
+
+### 13.4 Paste the token into OpenReply
+
+1. Sign in to OpenReply as a workspace owner or admin.
+2. Go to **Settings**. Under the Instagram accounts section, find
+   **Connect with Unified Login**.
+3. Paste the token into the **System-user token** field and click
+   **Connect account**. The field clears as soon as you submit — the
+   token is write-only and is never displayed again.
+
+Before anything is stored, OpenReply verifies the token on
+`graph.facebook.com`: it lists the Instagram accounts the token covers,
+resolves the account (username, account type), and rejects personal
+accounts with the same rule as the Instagram Login callback — switch the
+account to Business or Creator first, then reconnect. It also subscribes
+the account to the `comments` and `messages` webhooks. On success the
+account appears in Settings marked **Connected via Unified Login** with
+**Token never expires**.
+
+If the token covers more than one Instagram account, the form asks you to
+pick one from a dropdown and submit again — one token can cover several
+accounts, but OpenReply connects them one at a time.
+
+### 13.5 Switch on webhook delivery for the account
+
+On the same Unified Login page, under **2. Generate access tokens**, turn
+on the **Webhook Subscription** switch for the account. This is the
+Meta-side half of webhook delivery; OpenReply's `subscribed_apps` call
+during connect is the other half. If comments arrive in Meta's console
+test send but never reach OpenReply, check this switch first.
+
+### 13.6 What changes inside OpenReply
+
+- Accounts connected this way are marked `isUnifiedLogin` and call
+  `graph.facebook.com`; Instagram Login accounts keep calling
+  `graph.instagram.com`. The two paths coexist — a workspace can hold one
+  of each.
+- The stored token has no expiry date, and the daily token-refresh job
+  skips it. If the token is ever revoked in Meta, reconnect with a fresh
+  one from Section 13.3.
+- The Instagram account ID stored for the account is the professional
+  account ID (the number Meta's dashboard shows for the account, and the
+  value webhooks carry as `entry.id`). The Instagram internal ID
+  (`user_igid`) is a different number and is never used.
+- Webhook signature verification is unchanged: OpenReply still verifies
+  against `FACEBOOK_APP_SECRET` (and `INSTAGRAM_APP_SECRET` if set).
+- The tester rule still applies: in Development mode, and for Standard
+  Access after publishing, only accounts with a role on the app can
+  connect (Section 9.1). A system-user token does not bypass it.
+
+### 13.7 If it fails
+
+| Symptom | Likely cause | Fix |
+| --- | --- | --- |
+| "Meta rejected the token" in Settings | Token was generated for a different app, revoked, or copied with a typo | Generate a fresh token from Section 13.3 for this app and paste it again. Check for a leading/trailing space. |
+| "This Instagram account is a personal account" | The account is still personal | Switch it to Business or Creator in Instagram → Settings → Account type, then reconnect. |
+| "This token is not linked to any Instagram account" | The token was generated before the account was shared with the configuration's business portfolio | In Meta Business Suite, share the Instagram account with the portfolio, then generate a fresh token. |
+| Token accepted, but no comment ever arrives | Webhook Subscription switch off, or webhook fields unsubscribed | Section 13.5, then Section 6: subscribe to `comments` and `messages`. Use the console Test → Send to My Server to confirm delivery. |
+| "Invalid platform app" | You are on the Instagram Login authorize flow, which this app cannot use | You are in the wrong section: connect with the token-paste flow in Section 13.4, not the "Connect using your own Meta app" button. |

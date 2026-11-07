@@ -81,6 +81,19 @@ describe("refreshInstagramAccountToken", () => {
     expect(mockUpdate).not.toHaveBeenCalled();
   });
 
+  it("refuses Unified Login accounts without calling Meta", async () => {
+    // A system-user token never expires and Meta offers no endpoint to
+    // refresh it; the refresh paths must leave it alone, not fail the
+    // daily cron or a worker retry with a graph.instagram.com call that
+    // can only fail.
+    await expect(
+      refreshInstagramAccountToken(account({ isUnifiedLogin: true }))
+    ).rejects.toThrow("not supported for Unified Login");
+    expect(mockDecrypt).not.toHaveBeenCalled();
+    expect(mockRefresh).not.toHaveBeenCalled();
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
   it("does not persist anything when Meta rejects the refresh", async () => {
     mockRefresh.mockRejectedValue(new Error("invalid token"));
 

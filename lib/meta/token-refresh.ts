@@ -10,6 +10,9 @@ export interface RefreshableInstagramAccount {
   provider: "META" | "ZERNIO";
   accessToken: string;
   username?: string | null;
+  // Unified Login accounts carry a never-expiring system-user token, which
+  // has no refresh endpoint. Absent in older call sites; treated as false.
+  isUnifiedLogin?: boolean | null;
 }
 
 /**
@@ -32,6 +35,17 @@ export async function refreshInstagramAccountToken(
 ): Promise<{ accessToken: string; tokenExpiresAt: Date }> {
   if (account.provider !== "META") {
     throw new Error("Token refresh is only supported for Meta accounts");
+  }
+
+  // A Unified Login system-user token never expires and Meta offers no
+  // endpoint to refresh it. Refuse loudly instead of spending a
+  // graph.instagram.com refresh call that can only fail — the callers
+  // (daily cron, worker retry) treat a throw here as "leave the stored
+  // token alone", which is exactly right for a token that never expires.
+  if (account.isUnifiedLogin) {
+    throw new Error(
+      "Token refresh is not supported for Unified Login accounts: system-user tokens never expire"
+    );
   }
 
   const currentToken = decryptToken(account.accessToken);
