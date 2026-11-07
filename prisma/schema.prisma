@@ -242,6 +242,7 @@ model Automation {
   dmLogs           DmLog[]
   trackedLinks     TrackedLink[]
   linkClicks       LinkClick[]
+  scheduledPosts   ScheduledPost[]
 
   @@index([workspaceId])
   @@index([instagramAccountId])
@@ -491,6 +492,8 @@ model MediaAsset {
   id          String   @id @default(cuid())
   workspaceId String
   storageKey  String
+  /// Original filename at upload time, for the media library UI.
+  originalName String?
   mimeType    String
   byteSize    BigInt
   width       Int?
@@ -519,11 +522,16 @@ model ScheduledPost {
   lastError          String?
   attemptCount       Int @default(0)
   leaseUntil         DateTime?
+  /// Optional comment-to-DM campaign to bind after a successful publish.
+  /// Never activated for failed or canceled posts; see lib/publishing/publisher.ts.
+  automationId               String?
+  automationActivateOnPublish Boolean @default(false)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
   workspace          Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   instagramAccount   InstagramAccount @relation(fields: [instagramAccountId], references: [id], onDelete: Cascade)
   mediaAsset         MediaAsset @relation(fields: [mediaAssetId], references: [id], onDelete: Restrict)
+  automation         Automation? @relation(fields: [automationId], references: [id], onDelete: SetNull)
   attempts           PublishAttempt[]
   @@index([status, scheduledAt])
   @@index([workspaceId, scheduledAt])

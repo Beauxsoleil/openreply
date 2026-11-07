@@ -1,12 +1,20 @@
 import { getRedisConnection } from "@/lib/queue/client";
 
-const WORKER_HEALTH_KEY = "health:worker:dm";
-const WORKER_ALERTS_KEY = "alerts:worker:dm";
+export type WorkerName = "dm" | "publishing";
+
+function healthKey(worker: WorkerName): string {
+  return `health:worker:${worker}`;
+}
+
+function alertsKey(worker: WorkerName): string {
+  return `alerts:worker:${worker}`;
+}
+
 const WORKER_HEARTBEAT_TTL_SECONDS = 120;
 
 export interface WorkerHeartbeat {
   status: "running";
-  worker: "dm";
+  worker: WorkerName;
   pid: number;
   hostname?: string;
   startedAt?: string;
@@ -38,26 +46,29 @@ function parseJson<T>(value: string | null): T | null {
 }
 
 export async function recordWorkerHeartbeat(
-  heartbeat: Omit<WorkerHeartbeat, "checkedAt" | "status" | "worker">
+  heartbeat: Omit<WorkerHeartbeat, "checkedAt" | "status" | "worker">,
+  worker: WorkerName = "dm"
 ) {
   const payload: WorkerHeartbeat = {
     ...heartbeat,
     status: "running",
-    worker: "dm",
+    worker,
     checkedAt: new Date().toISOString(),
   };
 
   await getRedisConnection().set(
-    WORKER_HEALTH_KEY,
+    healthKey(worker),
     JSON.stringify(payload),
     "EX",
     WORKER_HEARTBEAT_TTL_SECONDS
   );
 }
 
-export async function getWorkerHealth(): Promise<WorkerHealth> {
+export async function getWorkerHealth(
+  worker: WorkerName = "dm"
+): Promise<WorkerHealth> {
   const heartbeat = parseJson<WorkerHeartbeat>(
-    await getRedisConnection().get(WORKER_HEALTH_KEY)
+    await getRedisConnection().get(healthKey(worker))
   );
 
   if (!heartbeat) {
@@ -72,20 +83,26 @@ export async function getWorkerHealth(): Promise<WorkerHealth> {
   };
 }
 
-export async function recordWorkerAlert(alert: Omit<WorkerAlert, "createdAt">) {
+export async function recordWorkerAlert(
+  alert: Omit<WorkerAlert, "createdAt">,
+  worker: WorkerName = "dm"
+) {
   const payload: WorkerAlert = {
     ...alert,
     createdAt: new Date().toISOString(),
   };
 
   const redis = getRedisConnection();
-  await redis.lpush(WORKER_ALERTS_KEY, JSON.stringify(payload));
-  await redis.ltrim(WORKER_ALERTS_KEY, 0, 24);
+  await redis.lpush(alertsKey(worker), JSON.stringify(payload));
+  await redis.ltrim(alertsKey(worker), 0, 24);
 }
 
-export async function getWorkerAlerts(limit = 10): Promise<WorkerAlert[]> {
+export async function getWorkerAlerts(
+  limit = 10,
+  worker: WorkerName = "dm"
+): Promise<WorkerAlert[]> {
   const values = await getRedisConnection().lrange(
-    WORKER_ALERTS_KEY,
+    alertsKey(worker),
     0,
     Math.max(0, limit - 1)
   );

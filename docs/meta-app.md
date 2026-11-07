@@ -729,10 +729,15 @@ permissions to this final set:
 | `instagram_manage_messages` | Send and read DMs (locked — cannot be removed) |
 | `instagram_manage_comments` | Read comments and post public replies |
 | `instagram_manage_insights` | Follower counts and per-media insights for the dashboard |
+| `instagram_content_publish` | Publish photos and Reels to Instagram (scheduled publishing, PR #16) |
 
 Remove `ads_management` and `ads_read` (they come with the template;
-OpenReply runs no ads). Do **not** add `instagram_content_publish` —
-OpenReply never publishes media, so it is not requested. If
+OpenReply runs no ads). `instagram_content_publish` is required for
+scheduled publishing: after adding it to the configuration, **regenerate
+the system-user token (§13.3)** — a token issued before the permission
+was added does not gain it — and re-paste it via §13.4. Until then,
+publish attempts fail with a `PermissionError` naming
+`instagram_content_publish`, by design. If
 `instagram_manage_insights` is missing, the dashboard still works:
 insights show as unavailable instead of breaking the page.
 
