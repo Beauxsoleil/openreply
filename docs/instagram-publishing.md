@@ -94,8 +94,11 @@ Phase 1: Instagram professional account image/Reel drafts and scheduled publishi
    (AllowedHeaders `Content-Type`, ExposeHeaders `ETag`).
 4. **Worker deploy:** on the Oracle VM, run the publishing worker as a
    second long-lived process (`npm run worker:publishing`) with
-   `DATABASE_URL`, `REDIS_URL`, `ENCRYPTION_KEY` plus the R2 vars. The
-   reconciler rebuilds queue jobs after restarts; no manual re-enqueue.
+   `DATABASE_URL`, `REDIS_URL`, `ENCRYPTION_KEY`, the R2 vars, plus
+   `INSTAGRAM_APP_ID` and `INSTAGRAM_APP_SECRET` (the permission probe
+   must call `debug_token` with the app access token as the caller — a
+   system-user token cannot inspect itself). The reconciler rebuilds
+   queue jobs after restarts; no manual re-enqueue.
 5. **End-to-end test:** schedule a test post on the real account and
    confirm it publishes, then delete it from Instagram. Do not claim live
    publishing works until that test passes.
@@ -111,10 +114,11 @@ Phase 1: Instagram professional account image/Reel drafts and scheduled publishi
   media containers expire 24h after creation.
 - Reels cover image is not yet supported (Meta `cover_url` is wired in
   the client but the composer does not collect one).
-- `checkPublishPermission` debugs the token against itself via
-  `debug_token`; if that proves unreliable for system-user tokens, the
-  fallback is an app access token (`INSTAGRAM_APP_ID|INSTAGRAM_APP_SECRET`)
-  as the inspecting token (not wired in).
+- `checkPublishPermission` inspects the publishing token via
+  `debug_token`, calling it with the app access token
+  (`INSTAGRAM_APP_ID|INSTAGRAM_APP_SECRET`) as the caller — a
+  system-user token cannot inspect itself (Meta #100). The publishing
+  worker needs both vars in its environment.
 
 ## Non-goals for first release
 Stories, carousels, auto-activation of DM campaigns, best-time recommendations, and multi-platform publishing.
