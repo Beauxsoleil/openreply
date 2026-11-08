@@ -40,11 +40,14 @@
  *     `instagram_business_content_publish`
  * `checkPublishPermission` probes the token's granted scopes via
  * `debug_token` and throws a PermissionError naming the missing permission
- * instead of letting the container create fail opaquely. The app's Unified
- * Login config currently does NOT include `instagram_content_publish`, so
- * live publishing fails this probe until the permission is added in the
- * Meta console and the system-user token is regenerated (see
- * docs/meta-app.md §13.2).
+ * instead of letting the container create fail opaquely. The probe inspects
+ * the publishing token as `input_token` but must call `debug_token` with
+ * the app access token (`{app-id}|{app-secret}`) as the caller: Meta
+ * rejects a system-user token inspecting itself with (#100) "You must
+ * provide an app access token, or a user access token that is an owner or
+ * developer of the app". The publishing worker therefore needs
+ * INSTAGRAM_APP_ID and INSTAGRAM_APP_SECRET in its environment (the web
+ * app already has them for OAuth and webhook verification).
  *
  * Media must sit at a publicly reachable HTTPS URL when the container is
  * created — Meta downloads it; there is no binary upload endpoint. OpenReply
@@ -52,6 +55,7 @@
  * Limit: 100 API-published posts per Instagram account per rolling 24h.
  */
 
+import { requireEnv } from "../env";
 import {
   debugToken,
   graphBaseFor,
@@ -241,18 +245,24 @@ export async function getPublishedMedia(args: {
  * permission — never let a publish proceed on a messaging-only token and
  * fail opaquely at container creation.
  *
- * Uses the existing `debugToken` helper with the token debugging itself:
- * Meta's /debug_token accepts a user access token belonging to the same app
- * as the inspecting token. A token that is not valid at all throws
- * TokenExpiredError. `debugToken` always reads graph.facebook.com, which is
- * where token inspection lives for both hosts.
+ * The token is inspected as `input_token`, but the `debug_token` call
+ * itself must be authenticated with the app access token
+ * (`{app-id}|{app-secret}`): Meta's /debug_token only accepts an app
+ * access token, or a user access token belonging to an owner or developer
+ * of the app, as the caller. A system-user token cannot inspect itself —
+ * passing it as the caller fails with (#100) "You must provide an app
+ * access token, or a user access token that is an owner or developer of
+ * the app". A token that is not valid at all throws TokenExpiredError.
+ * `debugToken` always reads graph.facebook.com, which is where token
+ * inspection lives for both hosts.
  */
 export async function checkPublishPermission(args: {
   accessToken: string;
   host: MetaGraphHost;
 }): Promise<{ permission: string; scopes: string[] }> {
   const required = getPublishPermission(args.host);
-  const result = await debugToken(args.accessToken, args.accessToken);
+  const appAccessToken = `${requireEnv("INSTAGRAM_APP_ID")}|${requireEnv("INSTAGRAM_APP_SECRET")}`;
+  const result = await debugToken(args.accessToken, appAccessToken);
   const data = result.data;
   if (data && data.is_valid === false) {
     throw new TokenExpiredError(

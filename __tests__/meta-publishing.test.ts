@@ -37,6 +37,11 @@ describe("Meta publishing client", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubGlobal("fetch", fetchMock);
+    // checkPublishPermission inspects the token via debug_token, which must
+    // be called with the app access token as the caller (a system-user
+    // token cannot inspect itself).
+    vi.stubEnv("INSTAGRAM_APP_ID", "app_123");
+    vi.stubEnv("INSTAGRAM_APP_SECRET", "secret_123");
     fetchMock.mockImplementation(async (url: string) => {
       if (url.includes("debug_token")) {
         return jsonResponse({
@@ -68,6 +73,7 @@ describe("Meta publishing client", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   function lastCall() {
@@ -222,6 +228,18 @@ describe("Meta publishing client", () => {
       });
       expect(result.permission).toBe("instagram_business_content_publish");
       expect(fetchMock.mock.calls[0][0]).toContain("/debug_token");
+    });
+
+    it("inspects the token as input_token and calls debug_token with the app access token", async () => {
+      await checkPublishPermission({
+        accessToken: "tok",
+        host: "instagram",
+      });
+      const debugUrl = new URL(fetchMock.mock.calls[0][0] as string);
+      expect(debugUrl.searchParams.get("input_token")).toBe("tok");
+      expect(debugUrl.searchParams.get("access_token")).toBe(
+        "app_123|secret_123"
+      );
     });
 
     it("throws PermissionError naming instagram_business_content_publish when it is missing", async () => {
