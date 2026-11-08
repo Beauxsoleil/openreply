@@ -29,7 +29,7 @@ function facebookGraphBase() {
   return `https://graph.facebook.com/${getMetaGraphApiVersion()}`;
 }
 
-function graphBaseFor(host: MetaGraphHost): string {
+export function graphBaseFor(host: MetaGraphHost): string {
   return host === "facebook" ? facebookGraphBase() : instagramGraphBase();
 }
 
@@ -175,7 +175,7 @@ interface TokenResponse {
   expires_in?: number;
 }
 
-async function handleResponse<T>(response: Response): Promise<T> {
+export async function handleResponse<T>(response: Response): Promise<T> {
   const data = await response.json();
 
   if (!response.ok || (data as GraphApiError).error) {
@@ -1069,10 +1069,24 @@ export async function listAssignedInstagramAccounts(
   return data.data ?? [];
 }
 
-export async function debugToken(inputToken: string, accessToken: string) {
+/** Shape of `GET /debug_token` — `data.scopes` is the granted-permission list. */
+export interface DebugTokenResult {
+  data?: {
+    app_id?: string;
+    type?: string;
+    is_valid?: boolean;
+    expires_at?: number;
+    scopes?: string[];
+  };
+}
+
+export async function debugToken(
+  inputToken: string,
+  accessToken: string
+): Promise<DebugTokenResult> {
   const url = new URL(`${graphBaseFor("facebook")}/debug_token`);
   url.searchParams.set("input_token", inputToken);
   url.searchParams.set("access_token", accessToken);
   const response = await fetch(url.toString());
-  return handleResponse(response);
+  return handleResponse<DebugTokenResult>(response);
 }

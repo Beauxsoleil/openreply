@@ -78,6 +78,8 @@ model Workspace {
   zernioConnection  ZernioConnection?
   members           WorkspaceMember[]
   invitations       WorkspaceInvitation[]
+  scheduledPosts    ScheduledPost[]
+  mediaAssets       MediaAsset[]
   instagramAccounts InstagramAccount[]
   automations       Automation[]
   dmLogs            DmLog[]
@@ -169,6 +171,7 @@ model InstagramAccount {
   recipientInteractions RecipientInteraction[]
   linkClicks  LinkClick[]
   followerSnapshots FollowerSnapshot[]
+  scheduledPosts ScheduledPost[]
 
   @@index([workspaceId])
 }
@@ -239,6 +242,7 @@ model Automation {
   dmLogs           DmLog[]
   trackedLinks     TrackedLink[]
   linkClicks       LinkClick[]
+  scheduledPosts   ScheduledPost[]
 
   @@index([workspaceId])
   @@index([instagramAccountId])
@@ -478,4 +482,87 @@ model RecipientInteraction {
 
   @@unique([instagramAccountId, recipientId])
   @@index([instagramAccountId])
+}
+
+
+// Instagram publishing is isolated from comment-to-DM automation.
+// No publishing job may execute for a DEMO account or without an explicit
+// user-authorized account and publishing permission.
+model MediaAsset {
+  id          String   @id @default(cuid())
+  workspaceId String
+  storageKey  String
+  /// Original filename at upload time, for the media library UI.
+  originalName String?
+  mimeType    String
+  byteSize    BigInt
+  width       Int?
+  height      Int?
+  durationSec Float?
+  createdAt   DateTime @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  posts       ScheduledPost[]
+  @@unique([workspaceId, storageKey])
+  @@index([workspaceId, createdAt])
+}
+
+model ScheduledPost {
+  id                 String @id @default(cuid())
+  workspaceId        String
+  instagramAccountId String
+  mediaAssetId       String
+  caption            String @default("")
+  kind               PublishKind
+  status             PublishStatus @default(DRAFT)
+  scheduledAt        DateTime?
+  timezone           String @default("UTC")
+  publishedAt        DateTime?
+  instagramMediaId   String?
+  containerId        String?
+  lastError          String?
+  attemptCount       Int @default(0)
+  leaseUntil         DateTime?
+  /// Optional comment-to-DM campaign to bind after a successful publish.
+  /// Never activated for failed or canceled posts; see lib/publishing/publisher.ts.
+  automationId               String?
+  automationActivateOnPublish Boolean @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  workspace          Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  instagramAccount   InstagramAccount @relation(fields: [instagramAccountId], references: [id], onDelete: Cascade)
+  mediaAsset         MediaAsset @relation(fields: [mediaAssetId], references: [id], onDelete: Restrict)
+  automation         Automation? @relation(fields: [automationId], references: [id], onDelete: SetNull)
+  attempts           PublishAttempt[]
+  @@index([status, scheduledAt])
+  @@index([workspaceId, scheduledAt])
+  @@index([instagramAccountId, scheduledAt])
+}
+
+model PublishAttempt {
+  id          String @id @default(cuid())
+  postId      String
+  startedAt   DateTime @default(now())
+  finishedAt  DateTime?
+  outcome     String?
+  errorCode   String?
+  // Never store access tokens or signed media URLs in audit logs.
+  details     Json?
+  post        ScheduledPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  @@index([postId, startedAt])
+}
+
+enum PublishKind {
+  IMAGE
+  REEL
+}
+
+enum PublishStatus {
+  DRAFT
+  SCHEDULED
+  PREPARING
+  PUBLISHING
+  PUBLISHED
+  FAILED
+  RECONCILE_REQUIRED
+  CANCELED
 }
