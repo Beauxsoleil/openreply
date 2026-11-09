@@ -16,7 +16,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 /** Presigned PUT URLs are valid 15 minutes: enough to start an upload. */
-export const UPLOAD_URL_EXPIRES_IN_SECONDS = 900;
+const UPLOAD_URL_EXPIRES_IN_SECONDS = 900;
 
 const uploadUrlInput = z.object({
   fileName: z.string().min(1).max(255),

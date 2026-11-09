@@ -42,6 +42,7 @@ import {
   publishContainer,
 } from "@/lib/meta/publishing";
 import { getMediaDeliveryUrl } from "@/lib/publishing/r2";
+import { publishYouTubePost } from "@/lib/publishing/youtube-publisher";
 
 const LEASE_MS = 10 * 60 * 1000;
 
@@ -470,6 +471,14 @@ export async function publishPost(
       "publish"
     );
   }
+}
+
+export async function publishScheduledPost(postId: string, opts?: PublishOptions) {
+  const post = await prisma.scheduledPost.findUnique({
+    where: { id: postId }, select: { platform: true },
+  });
+  if (post?.platform === "YOUTUBE") return publishYouTubePost(postId);
+  return publishPost(postId, opts);
 }
 
 export type ReconcileAction =

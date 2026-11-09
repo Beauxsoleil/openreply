@@ -15,6 +15,7 @@
 import { prisma } from "@/lib/db/client";
 import { enqueuePublish, hasLivePublishJob } from "@/lib/queue/publishing";
 import { reconcilePost } from "./publisher";
+import { reconcileYouTubePost } from "./youtube-publisher";
 
 export interface ReconcilePublishingResult {
   enqueued: string[];
@@ -47,18 +48,35 @@ export async function reconcilePublishing(): Promise<ReconcilePublishingResult> 
   const due = await prisma.scheduledPost.findMany({
     where: {
       status: "SCHEDULED",
-      scheduledAt: { lte: new Date(now.getTime() + 60_000) },
+      OR: [
+        { platform: "INSTAGRAM", scheduledAt: { lte: new Date(now.getTime() + 60_000) } },
+        { platform: "YOUTUBE", youtubeVideoId: null },
+      ],
     },
-    select: { id: true, scheduledAt: true, workspaceId: true },
+    select: { id: true, platform: true, scheduledAt: true, workspaceId: true },
   });
   for (const post of due) {
     if (!post.scheduledAt) continue;
     if (await hasLivePublishJob(post.id)) continue;
-    await enqueuePublish(post.id, post.scheduledAt);
+    await enqueuePublish(post.id, post.platform === "YOUTUBE" ? now : post.scheduledAt);
     result.enqueued.push(post.id);
     await logAction(post.workspaceId, "Enqueued overdue scheduled post", {
       postId: post.id,
       scheduledAt: post.scheduledAt.toISOString(),
+    });
+  }
+
+  const uploadedYouTubePosts = await prisma.scheduledPost.findMany({
+    where: { platform: "YOUTUBE", status: "SCHEDULED", youtubeVideoId: { not: null } },
+    select: { id: true, platform: true, workspaceId: true },
+    take: 100,
+  });
+  for (const post of uploadedYouTubePosts) {
+    const reconciled = await reconcileYouTubePost(post.id);
+    if (reconciled.action === "none") continue;
+    result.reconciled.push({ postId: post.id, action: reconciled.action, status: reconciled.status });
+    await logAction(post.workspaceId, `Reconciled YouTube post (${reconciled.action})`, {
+      postId: post.id, action: reconciled.action, status: reconciled.status,
     });
   }
 
@@ -67,10 +85,12 @@ export async function reconcilePublishing(): Promise<ReconcilePublishingResult> 
       status: { in: ["PREPARING", "PUBLISHING"] },
       leaseUntil: { lt: now },
     },
-    select: { id: true, workspaceId: true },
+    select: { id: true, platform: true, workspaceId: true },
   });
   for (const post of stale) {
-    const reconciled = await reconcilePost(post.id);
+    const reconciled = post.platform === "YOUTUBE"
+      ? await reconcileYouTubePost(post.id)
+      : await reconcilePost(post.id);
     if (reconciled.action === "none") continue;
     result.reconciled.push({
       postId: post.id,

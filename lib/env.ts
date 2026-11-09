@@ -46,6 +46,21 @@ export function getMissingInstagramOAuthEnv(): string[] {
   });
 }
 
+const YOUTUBE_OAUTH_ENV = [
+  "GOOGLE_CLIENT_ID",
+  "GOOGLE_CLIENT_SECRET",
+  "ENCRYPTION_KEY",
+  "NEXTAUTH_SECRET",
+] as const;
+
+export function getMissingYouTubeOAuthEnv(): string[] {
+  return YOUTUBE_OAUTH_ENV.filter((name) => {
+    const value = process.env[name];
+    if (!value) return true;
+    return name === "ENCRYPTION_KEY" && !HEX_32_BYTE.test(value);
+  });
+}
+
 export function getMetaGraphApiVersion(): string {
   return process.env.META_GRAPH_API_VERSION ?? "v25.0";
 }

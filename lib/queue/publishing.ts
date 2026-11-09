@@ -15,7 +15,7 @@
 
 import { Queue, Worker } from "bullmq";
 import { RateLimitError } from "@/lib/meta/client";
-import { publishPost } from "@/lib/publishing/publisher";
+import { publishScheduledPost } from "@/lib/publishing/publisher";
 import { getRedisConnection } from "./client";
 
 export interface PublishJob {
@@ -105,7 +105,7 @@ export function createPublishingWorker(): Worker<PublishJob> {
     "publishing",
     async (job) => {
       try {
-        const result = await publishPost(job.data.postId);
+        const result = await publishScheduledPost(job.data.postId);
         if (!result.claimed) {
           console.log(
             `[Publishing Worker] Post ${job.data.postId} not claimed (already handled or not due)`

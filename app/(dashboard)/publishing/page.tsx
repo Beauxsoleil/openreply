@@ -13,10 +13,12 @@ import { useCallback, useEffect, useState } from "react";
 import {
   listCampaigns,
   listInstagramAccounts,
+  listYouTubeChannels,
   listPosts,
   toPlainError,
   type CampaignOption,
   type InstagramAccountOption,
+  type YouTubeChannelOption,
   type ScheduledPost,
 } from "@/lib/publishing/api-client";
 import CalendarView from "@/components/publishing/calendar-view";
@@ -39,6 +41,7 @@ export default function PublishingPage() {
   const [tab, setTab] = useState<Tab>("calendar");
   const [posts, setPosts] = useState<ScheduledPost[]>([]);
   const [accounts, setAccounts] = useState<InstagramAccountOption[]>([]);
+  const [youtubeChannels, setYouTubeChannels] = useState<YouTubeChannelOption[]>([]);
   const [campaigns, setCampaigns] = useState<CampaignOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -57,13 +60,15 @@ export default function PublishingPage() {
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [fetchedPosts, fetchedAccounts, fetchedCampaigns] = await Promise.all([
+      const [fetchedPosts, fetchedAccounts, fetchedYouTubeChannels, fetchedCampaigns] = await Promise.all([
         listPosts(),
         listInstagramAccounts().catch(() => ({ instagramAccounts: [], selectedInstagramAccountId: null })),
+        listYouTubeChannels().catch(() => [] as YouTubeChannelOption[]),
         listCampaigns().catch(() => [] as CampaignOption[]),
       ]);
       setPosts(fetchedPosts);
       setAccounts(fetchedAccounts.instagramAccounts);
+      setYouTubeChannels(fetchedYouTubeChannels);
       setCampaigns(fetchedCampaigns);
       setError("");
     } catch (e) {
@@ -90,7 +95,8 @@ export default function PublishingPage() {
       <header className="space-y-2">
         <p className="text-sm text-accent font-semibold">CONTENT STUDIO</p>
         <h1 className="text-3xl font-bold">Publishing calendar</h1>
-        <p className="text-muted">Plan Instagram images and Reels. Schedule them, then watch them go out.</p>
+        <p className="text-muted">Plan Instagram posts, YouTube videos, and Shorts in one calendar.</p>
+        <a href="/api/youtube/connect" className="inline-flex min-h-11 items-center rounded-lg border border-border px-4 py-2 text-sm font-medium hover:border-border-hover">Connect YouTube channel</a>
       </header>
 
       <div className="flex flex-wrap items-center gap-2" role="tablist" aria-label="Publishing views">
@@ -132,6 +138,7 @@ export default function PublishingPage() {
           {tab === "composer" && (
             <Composer
               accounts={accounts}
+              youtubeChannels={youtubeChannels}
               campaigns={campaigns}
               onCreated={handleCreated}
               onViewCalendar={() => setTab("calendar")}

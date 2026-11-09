@@ -15,6 +15,7 @@ import {
   uploadMediaFile,
   type CampaignOption,
   type InstagramAccountOption,
+  type YouTubeChannelOption,
   type MediaAsset,
   type PostKind,
 } from "@/lib/publishing/api-client";
@@ -29,19 +30,22 @@ import {
 
 interface ComposerProps {
   accounts: InstagramAccountOption[];
+  youtubeChannels: YouTubeChannelOption[];
   campaigns: CampaignOption[];
   onCreated: (post: { id: string; status: string }) => void;
   onViewCalendar: () => void;
 }
 
 const CAPTION_MAX = 2200;
+const YOUTUBE_DESCRIPTION_MAX = 5000;
 
 function todayKey(): string {
   const today = new Date();
   return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 }
 
-export default function Composer({ accounts, campaigns, onCreated, onViewCalendar }: ComposerProps) {
+export default function Composer({ accounts, youtubeChannels, campaigns, onCreated, onViewCalendar }: ComposerProps) {
+  const [platform, setPlatform] = useState<"INSTAGRAM" | "YOUTUBE">("INSTAGRAM");
   const [kind, setKind] = useState<PostKind>("IMAGE");
   const [library, setLibrary] = useState<MediaAsset[]>([]);
   const [libraryLoading, setLibraryLoading] = useState(false);
@@ -52,7 +56,12 @@ export default function Composer({ accounts, campaigns, onCreated, onViewCalenda
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [caption, setCaption] = useState("");
+  const [title, setTitle] = useState("");
   const [accountId, setAccountId] = useState("");
+  const [youtubeChannelId, setYouTubeChannelId] = useState("");
+  const [youtubePrivacy, setYouTubePrivacy] = useState<"PRIVATE" | "UNLISTED" | "PUBLIC">("PUBLIC");
+  const [youtubeMadeForKids, setYouTubeMadeForKids] = useState(false);
+  const [youtubeNotifySubscribers, setYouTubeNotifySubscribers] = useState(true);
   const [date, setDate] = useState(todayKey());
   const [time, setTime] = useState("10:00");
   const [timezone, setTimezone] = useState("America/Boise");
@@ -67,13 +76,13 @@ export default function Composer({ accounts, campaigns, onCreated, onViewCalenda
     setLibraryLoading(true);
     setLibraryError("");
     try {
-      setLibrary(await listMedia(kind));
+      setLibrary(await listMedia(platform === "YOUTUBE" ? "REEL" : kind));
     } catch (e) {
       setLibraryError(toPlainError(e));
     } finally {
       setLibraryLoading(false);
     }
-  }, [kind]);
+  }, [kind, platform]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -85,7 +94,9 @@ export default function Composer({ accounts, campaigns, onCreated, onViewCalenda
   // Default to the first connected account until the user picks one.
   // Derived during render, not synced in an effect.
   const effectiveAccountId = accountId || accounts[0]?.id || "";
+  const effectiveYouTubeChannelId = youtubeChannelId || youtubeChannels[0]?.id || "";
   const selectedAccount = accounts.find((a) => a.id === effectiveAccountId);
+  const selectedYouTubeChannel = youtubeChannels.find((a) => a.id === effectiveYouTubeChannelId);
   const selectedCampaign = campaigns.find((c) => c.id === automationId);
   const isVideoAsset =
     selectedAsset?.mimeType.startsWith("video/") ?? kind === "REEL";
@@ -93,7 +104,7 @@ export default function Composer({ accounts, campaigns, onCreated, onViewCalenda
   async function handleFile(file: File | undefined) {
     if (!file) return;
     setUploadError("");
-    const wantVideo = kind === "REEL";
+    const wantVideo = platform === "YOUTUBE" || kind === "REEL";
     if (wantVideo && !file.type.startsWith("video/")) {
       setUploadError("Pick a video file for a Reel.");
       return;
@@ -104,7 +115,7 @@ export default function Composer({ accounts, campaigns, onCreated, onViewCalenda
     }
     setUploadProgress(0);
     try {
-      const asset = await uploadMediaFile(file, kind, (f) => setUploadProgress(f));
+      const asset = await uploadMediaFile(file, wantVideo ? "REEL" : "IMAGE", (f) => setUploadProgress(f));
       setSelectedAsset(asset);
       setLibrary((prev) => [asset, ...prev]);
       setUploadProgress(null);
@@ -115,9 +126,13 @@ export default function Composer({ accounts, campaigns, onCreated, onViewCalenda
   }
 
   function validate(schedule: boolean): string | null {
-    if (!effectiveAccountId) return "Pick an Instagram account first.";
+    if (platform === "INSTAGRAM" && !effectiveAccountId) return "Pick an Instagram account first.";
+    if (platform === "YOUTUBE" && !effectiveYouTubeChannelId) return "Connect and pick a YouTube channel first.";
     if (!selectedAsset) return "Pick media from the library or upload new media first.";
-    if (caption.length > CAPTION_MAX) return `Caption is over the ${CAPTION_MAX}-character limit.`;
+    const captionMax = platform === "YOUTUBE" ? YOUTUBE_DESCRIPTION_MAX : CAPTION_MAX;
+    if (caption.length > captionMax) return `${platform === "YOUTUBE" ? "Description" : "Caption"} is over the ${captionMax}-character limit.`;
+    if (platform === "YOUTUBE" && (!title.trim() || title.length > 100)) return "Add a YouTube title of 100 characters or fewer.";
+    if (platform === "YOUTUBE" && schedule && youtubePrivacy !== "PUBLIC") return "Scheduled YouTube videos must be Public; YouTube keeps them private until publishAt.";
     if (schedule) {
       if (!date || !time) return "Pick a date and a time to schedule.";
       try {
@@ -144,10 +159,16 @@ export default function Composer({ accounts, campaigns, onCreated, onViewCalenda
         ? wallTimeToUtc(date, time, timezone).toISOString()
         : null;
       const result = await createPost({
-        instagramAccountId: effectiveAccountId,
+        platform,
+        instagramAccountId: platform === "INSTAGRAM" ? effectiveAccountId : null,
+        youtubeChannelId: platform === "YOUTUBE" ? effectiveYouTubeChannelId : null,
         mediaAssetId: selectedAsset!.id,
         kind,
+        title: platform === "YOUTUBE" ? title.trim() : null,
         caption,
+        youtubePrivacy: platform === "YOUTUBE" ? youtubePrivacy : null,
+        youtubeMadeForKids: platform === "YOUTUBE" ? youtubeMadeForKids : null,
+        youtubeNotifySubscribers,
         scheduledAt,
         timezone,
         automationId: automationId || null,
@@ -164,6 +185,7 @@ export default function Composer({ accounts, campaigns, onCreated, onViewCalenda
       );
       onCreated(result);
       setCaption("");
+      setTitle("");
       setSelectedAsset(null);
       setAutomationId("");
       setActivateOnPublish(false);
@@ -177,11 +199,32 @@ export default function Composer({ accounts, campaigns, onCreated, onViewCalenda
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
       <div className="space-y-5">
+        <section className="panel space-y-3 rounded-xl p-4" aria-label="Publishing platform">
+          <h2 className="font-semibold">Platform</h2>
+          <div className="inline-flex rounded-lg bg-background p-1" role="group" aria-label="Publishing platform">
+            {(["INSTAGRAM", "YOUTUBE"] as const).map((value) => (
+              <button key={value} type="button" aria-pressed={platform === value}
+                onClick={() => {
+                  setPlatform(value);
+                  setKind(value === "YOUTUBE" ? "VIDEO" : "IMAGE");
+                  setSelectedAsset(null);
+                  setAutomationId("");
+                  setActivateOnPublish(false);
+                }}
+                className={`min-h-11 rounded-md px-4 py-2 text-sm ${platform === value ? "bg-surface font-medium ring-1 ring-accent/40" : "text-muted"}`}>
+                {value === "INSTAGRAM" ? "Instagram" : "YouTube"}
+              </button>
+            ))}
+          </div>
+          {platform === "YOUTUBE" && youtubeChannels.length === 0 && (
+            <p className="text-sm text-muted">No YouTube channel connected. <a className="text-accent underline" href="/api/youtube/connect">Connect YouTube</a></p>
+          )}
+        </section>
         <section className="panel space-y-3 rounded-xl p-4" aria-label="Post type and media">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="font-semibold">Media</h2>
             <div className="inline-flex rounded-lg bg-background p-1" role="group" aria-label="Post type">
-              {(["IMAGE", "REEL"] as const).map((k) => (
+              {(platform === "YOUTUBE" ? (["VIDEO", "SHORT"] as const) : (["IMAGE", "REEL"] as const)).map((k) => (
                 <button
                   key={k}
                   type="button"
@@ -194,7 +237,7 @@ export default function Composer({ accounts, campaigns, onCreated, onViewCalenda
                     kind === k ? "bg-surface font-medium ring-1 ring-accent/40" : "text-muted hover:text-foreground"
                   }`}
                 >
-                  {k === "IMAGE" ? "Image" : "Reel"}
+                  {k === "IMAGE" ? "Image" : k === "REEL" ? "Reel" : k === "VIDEO" ? "Video" : "Short"}
                 </button>
               ))}
             </div>
@@ -204,7 +247,7 @@ export default function Composer({ accounts, campaigns, onCreated, onViewCalenda
             <input
               ref={fileInputRef}
               type="file"
-              accept={kind === "REEL" ? "video/*" : "image/*"}
+              accept={platform === "YOUTUBE" || kind === "REEL" ? "video/*" : "image/*"}
               className="hidden"
               onChange={(e) => {
                 void handleFile(e.target.files?.[0]);
@@ -232,7 +275,7 @@ export default function Composer({ accounts, campaigns, onCreated, onViewCalenda
             <p className="text-sm text-muted">Loading media…</p>
           ) : library.length === 0 ? (
             <p className="rounded-lg border border-dashed border-border p-4 text-center text-sm text-muted">
-              No {kind === "REEL" ? "videos" : "images"} in the library yet. Upload one above.
+              No {platform === "YOUTUBE" || kind === "REEL" ? "videos" : "images"} in the library yet. Upload one above.
             </p>
           ) : (
             <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
@@ -282,11 +325,18 @@ export default function Composer({ accounts, campaigns, onCreated, onViewCalenda
           )}
         </section>
 
-        <section className="panel space-y-3 rounded-xl p-4" aria-label="Caption">
+        <section className="panel space-y-3 rounded-xl p-4" aria-label={platform === "YOUTUBE" ? "YouTube details" : "Caption"}>
+          {platform === "YOUTUBE" && (
+            <div>
+              <label htmlFor="composer-title" className="mb-1 block font-semibold">Title</label>
+              <input id="composer-title" value={title} maxLength={100} onChange={(e) => setTitle(e.target.value)} className={fieldClass} />
+              <p className="mt-1 text-right text-xs text-muted">{title.length}/100</p>
+            </div>
+          )}
           <div className="flex items-center justify-between">
-            <label htmlFor="composer-caption" className="font-semibold">Caption</label>
-            <span className={`text-xs ${caption.length > CAPTION_MAX ? "text-error" : "text-muted"}`}>
-              {caption.length}/{CAPTION_MAX}
+            <label htmlFor="composer-caption" className="font-semibold">{platform === "YOUTUBE" ? "Description" : "Caption"}</label>
+            <span className={`text-xs ${caption.length > (platform === "YOUTUBE" ? YOUTUBE_DESCRIPTION_MAX : CAPTION_MAX) ? "text-error" : "text-muted"}`}>
+              {caption.length}/{platform === "YOUTUBE" ? YOUTUBE_DESCRIPTION_MAX : CAPTION_MAX}
             </span>
           </div>
           <textarea
@@ -294,11 +344,11 @@ export default function Composer({ accounts, campaigns, onCreated, onViewCalenda
             value={caption}
             onChange={(e) => setCaption(e.target.value)}
             rows={6}
-            maxLength={CAPTION_MAX + 500}
-            placeholder="Write your caption…"
+            maxLength={YOUTUBE_DESCRIPTION_MAX}
+            placeholder={platform === "YOUTUBE" ? "Describe your video…" : "Write your caption…"}
             className={fieldClass}
           />
-          {caption.length > CAPTION_MAX && (
+          {platform === "INSTAGRAM" && caption.length > CAPTION_MAX && (
             <p role="alert" className="text-sm text-error">Instagram captions are limited to {CAPTION_MAX} characters.</p>
           )}
         </section>
@@ -306,19 +356,31 @@ export default function Composer({ accounts, campaigns, onCreated, onViewCalenda
         <section className="panel space-y-4 rounded-xl p-4" aria-label="Schedule">
           <h2 className="font-semibold">Account &amp; schedule</h2>
           <div>
-            <label htmlFor="composer-account" className="mb-1 block text-xs font-medium text-muted">Instagram account</label>
+            <label htmlFor="composer-account" className="mb-1 block text-xs font-medium text-muted">{platform === "YOUTUBE" ? "YouTube channel" : "Instagram account"}</label>
             <select
               id="composer-account"
-              value={effectiveAccountId}
-              onChange={(e) => setAccountId(e.target.value)}
+              value={platform === "YOUTUBE" ? effectiveYouTubeChannelId : effectiveAccountId}
+              onChange={(e) => platform === "YOUTUBE" ? setYouTubeChannelId(e.target.value) : setAccountId(e.target.value)}
               className={fieldClass}
             >
-              {accounts.length === 0 && <option value="">No accounts connected</option>}
-              {accounts.map((a) => (
-                <option key={a.id} value={a.id}>@{a.username}</option>
-              ))}
+              {platform === "YOUTUBE" ? <>
+                {youtubeChannels.length === 0 && <option value="">No channels connected</option>}
+                {youtubeChannels.map((a) => <option key={a.id} value={a.id}>{a.title}</option>)}
+              </> : <>
+                {accounts.length === 0 && <option value="">No accounts connected</option>}
+                {accounts.map((a) => <option key={a.id} value={a.id}>@{a.username}</option>)}
+              </>}
             </select>
           </div>
+          {platform === "YOUTUBE" && <div className="grid gap-3 sm:grid-cols-2">
+            <label className="text-sm">Privacy<select value={youtubePrivacy} onChange={(e) => setYouTubePrivacy(e.target.value as typeof youtubePrivacy)} className={fieldClass}>
+              <option value="PUBLIC">Public (scheduled)</option><option value="UNLISTED">Unlisted (draft only)</option><option value="PRIVATE">Private (draft only)</option>
+            </select></label>
+            <label className="text-sm">Audience<select value={youtubeMadeForKids ? "kids" : "not-kids"} onChange={(e) => setYouTubeMadeForKids(e.target.value === "kids")} className={fieldClass}>
+              <option value="not-kids">Not made for kids</option><option value="kids">Made for kids</option>
+            </select></label>
+            <label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" checked={youtubeNotifySubscribers} onChange={(e) => setYouTubeNotifySubscribers(e.target.checked)} /> Notify subscribers</label>
+          </div>}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label htmlFor="composer-date" className="mb-1 block text-xs font-medium text-muted">Date</label>
@@ -339,7 +401,7 @@ export default function Composer({ accounts, campaigns, onCreated, onViewCalenda
           </div>
         </section>
 
-        <section className="panel space-y-3 rounded-xl p-4" aria-label="DM automation">
+        {platform === "INSTAGRAM" && <section className="panel space-y-3 rounded-xl p-4" aria-label="DM automation">
           <h2 className="font-semibold">DM automation <span className="text-sm font-normal text-muted">(optional)</span></h2>
           {campaigns.length === 0 ? (
             <p className="text-sm text-muted">No campaigns yet. Create one on the Campaigns page to attach it here.</p>
@@ -374,7 +436,7 @@ export default function Composer({ accounts, campaigns, onCreated, onViewCalenda
               </label>
             </>
           )}
-        </section>
+        </section>}
 
         {error && <ErrorBox message={error} />}
         {notice && <NoticeBox message={notice} />}
@@ -400,9 +462,9 @@ export default function Composer({ accounts, campaigns, onCreated, onViewCalenda
         <div className="mx-auto w-full max-w-72 overflow-hidden rounded-2xl border border-border bg-background">
           <div className="flex items-center gap-2 border-b border-border px-3 py-2">
             <span className="flex h-8 w-8 items-center justify-center rounded-full bg-accent text-sm font-bold text-white">
-              {(selectedAccount?.username ?? "?").slice(0, 1).toUpperCase()}
+              {(platform === "YOUTUBE" ? selectedYouTubeChannel?.title ?? "?" : selectedAccount?.username ?? "?").slice(0, 1).toUpperCase()}
             </span>
-            <span className="truncate text-sm font-medium">@{selectedAccount?.username ?? "account"}</span>
+            <span className="truncate text-sm font-medium">{platform === "YOUTUBE" ? selectedYouTubeChannel?.title ?? "YouTube channel" : `@${selectedAccount?.username ?? "account"}`}</span>
           </div>
           <div className="flex aspect-square items-center justify-center bg-surface">
             {selectedAsset?.previewUrl ? (
@@ -418,7 +480,7 @@ export default function Composer({ accounts, campaigns, onCreated, onViewCalenda
           </div>
           <div className="px-3 py-3">
             <p className="whitespace-pre-wrap break-words text-sm">
-              <span className="font-semibold">@{selectedAccount?.username ?? "account"}</span>{" "}
+              <span className="font-semibold">{platform === "YOUTUBE" ? title || "Video title" : `@${selectedAccount?.username ?? "account"}`}</span>{" "}
               {caption || <span className="text-muted">Your caption will appear here.</span>}
             </p>
             {selectedCampaign && (

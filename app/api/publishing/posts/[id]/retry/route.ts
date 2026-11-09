@@ -16,7 +16,7 @@ export async function POST(
   const { id } = await params;
   const post = await prisma.scheduledPost.findFirst({
     where: { id, workspaceId: context.workspaceId },
-    select: { id: true, status: true, scheduledAt: true },
+    select: { id: true, platform: true, status: true, scheduledAt: true },
   });
   if (!post) return NextResponse.json({ success: false, error: "Post not found" }, { status: 404 });
   if (post.status !== "FAILED") {
@@ -28,6 +28,6 @@ export async function POST(
     select: { id: true, status: true, scheduledAt: true },
   });
   // Attempt history stays in PublishAttempt; only the post's lastError is cleared.
-  await enqueuePublish(post.id, updated.scheduledAt ?? new Date());
+  await enqueuePublish(post.id, post.platform === "YOUTUBE" ? new Date() : updated.scheduledAt ?? new Date());
   return NextResponse.json({ success: true, data: updated });
 }

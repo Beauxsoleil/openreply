@@ -21,7 +21,8 @@ export type PostStatus =
   | "RECONCILE_REQUIRED"
   | "CANCELED";
 
-export type PostKind = "IMAGE" | "REEL";
+export type PostKind = "IMAGE" | "REEL" | "VIDEO" | "SHORT";
+export type PublishPlatform = "INSTAGRAM" | "YOUTUBE";
 
 export interface MediaAssetSummary {
   id: string;
@@ -40,6 +41,8 @@ export interface MediaAsset extends MediaAssetSummary {
 
 export interface ScheduledPost {
   id: string;
+  platform?: PublishPlatform;
+  title?: string | null;
   caption: string;
   kind: PostKind;
   status: PostStatus;
@@ -47,12 +50,17 @@ export interface ScheduledPost {
   timezone: string;
   publishedAt: string | null;
   instagramMediaId: string | null;
+  youtubeVideoId?: string | null;
+  youtubePrivacy?: "PRIVATE" | "UNLISTED" | "PUBLIC" | null;
+  youtubeMadeForKids?: boolean | null;
+  youtubeNotifySubscribers?: boolean;
   lastError: string | null;
   attemptCount: number;
   automationId: string | null;
   automationActivateOnPublish: boolean;
   mediaAsset: MediaAssetSummary;
-  instagramAccount: { id: string; username: string };
+  instagramAccount: { id: string; username: string } | null;
+  youtubeChannel?: { id: string; channelId: string; title: string } | null;
 }
 
 export interface PostAttempt {
@@ -81,11 +89,24 @@ export interface CampaignOption {
   instagramAccount: { username: string; instagramId: string };
 }
 
+export interface YouTubeChannelOption {
+  id: string;
+  channelId: string;
+  title: string;
+  thumbnailUrl?: string | null;
+}
+
 export interface CreatePostInput {
-  instagramAccountId: string;
+  platform?: PublishPlatform;
+  instagramAccountId?: string | null;
+  youtubeChannelId?: string | null;
   mediaAssetId: string;
   kind: PostKind;
+  title?: string | null;
   caption: string;
+  youtubePrivacy?: "PRIVATE" | "UNLISTED" | "PUBLIC" | null;
+  youtubeMadeForKids?: boolean | null;
+  youtubeNotifySubscribers?: boolean;
   scheduledAt?: string | null;
   timezone: string;
   automationId?: string | null;
@@ -172,6 +193,10 @@ function jsonBody(body: unknown): RequestInit {
 
 export async function listPosts(): Promise<ScheduledPost[]> {
   return request<ScheduledPost[]>("/api/publishing/posts");
+}
+
+export async function listYouTubeChannels(): Promise<YouTubeChannelOption[]> {
+  return request<YouTubeChannelOption[]>("/api/youtube/channels");
 }
 
 export async function getPost(id: string): Promise<ScheduledPostDetail> {
