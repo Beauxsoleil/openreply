@@ -9,6 +9,18 @@ import Redis from "ioredis";
 
 let connection: Redis | null = null;
 
+export const DEFAULT_REDIS_WORKER_DRAIN_DELAY_SECONDS = 30;
+
+export function getRedisWorkerDrainDelaySeconds(): number {
+  const value = Number(
+    process.env.REDIS_WORKER_DRAIN_DELAY_SECONDS
+      ?? DEFAULT_REDIS_WORKER_DRAIN_DELAY_SECONDS
+  );
+  return Number.isFinite(value) && value >= 5
+    ? value
+    : DEFAULT_REDIS_WORKER_DRAIN_DELAY_SECONDS;
+}
+
 export function getRedisConnection(): Redis {
   if (!connection) {
     connection = new Redis(process.env.REDIS_URL!, {

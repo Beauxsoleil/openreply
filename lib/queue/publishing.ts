@@ -16,7 +16,7 @@
 import { Queue, Worker } from "bullmq";
 import { RateLimitError } from "@/lib/meta/client";
 import { publishScheduledPost } from "@/lib/publishing/publisher";
-import { getRedisConnection } from "./client";
+import { getRedisConnection, getRedisWorkerDrainDelaySeconds } from "./client";
 
 export interface PublishJob {
   postId: string;
@@ -127,7 +127,13 @@ export function createPublishingWorker(): Worker<PublishJob> {
         throw error;
       }
     },
-    { connection: getRedisConnection(), concurrency: 1 }
+    {
+      connection: getRedisConnection(),
+      concurrency: 1,
+      // Avoid burning the hosted Redis free tier while the queue is empty.
+      // Jobs can wait up to this many seconds for an idle worker to wake.
+      drainDelay: getRedisWorkerDrainDelaySeconds(),
+    }
   );
 
   worker.on("completed", (job) => {

@@ -124,6 +124,7 @@ vi.mock("@/lib/queue/client", () => ({
     add: mockQueueAdd,
   }),
   getRedisConnection: vi.fn(),
+  getRedisWorkerDrainDelaySeconds: () => 30,
   POSTBACK_JOB_NAME: "process-postback",
   FOLLOWUP_JOB_NAME: "process-followup",
   MESSAGE_JOB_NAME: "process-message",

@@ -10,6 +10,7 @@ import { UnrecoverableError, Worker, type Job } from "bullmq";
 import {
   getDMQueue,
   getRedisConnection,
+  getRedisWorkerDrainDelaySeconds,
   MESSAGE_JOB_NAME,
   POSTBACK_JOB_NAME,
   FOLLOWUP_JOB_NAME,
@@ -2090,6 +2091,10 @@ export function createDMWorker(): Worker<DmQueueJob> {
   const worker = new Worker<DmQueueJob>("dm-processing", processJob, {
     connection: getRedisConnection(),
     concurrency: 5,
+    // BullMQ defaults to retrying an empty queue every 5 seconds. A quiet
+    // always-on worker would consume most of Upstash's 500K-command free tier
+    // on polling alone, so accept a small idle wake-up delay instead.
+    drainDelay: getRedisWorkerDrainDelaySeconds(),
     settings: {
       backoffStrategy: (attemptsMade: number) =>
         BACKOFF_DELAYS[Math.min(attemptsMade - 1, BACKOFF_DELAYS.length - 1)],
