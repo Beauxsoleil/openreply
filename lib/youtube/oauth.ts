@@ -3,7 +3,10 @@ import { requireEnv } from "@/lib/env";
 
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
-export const YOUTUBE_SCOPE = "https://www.googleapis.com/auth/youtube.upload";
+export const YOUTUBE_SCOPES = [
+  "https://www.googleapis.com/auth/youtube.upload",
+  "https://www.googleapis.com/auth/youtube.readonly",
+] as const;
 
 export { createOAuthState, verifyOAuthState };
 
@@ -12,7 +15,7 @@ export function getYouTubeAuthorizationUrl(redirectUri: string, state: string): 
     client_id: requireEnv("GOOGLE_CLIENT_ID"),
     redirect_uri: redirectUri,
     response_type: "code",
-    scope: YOUTUBE_SCOPE,
+    scope: YOUTUBE_SCOPES.join(" "),
     access_type: "offline",
     include_granted_scopes: "true",
     prompt: "consent",

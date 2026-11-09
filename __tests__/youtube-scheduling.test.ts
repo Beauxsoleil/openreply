@@ -11,7 +11,7 @@ describe("YouTube OAuth and scheduling", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  it("signs workspace state and requests offline upload access", () => {
+  it("signs workspace state and requests offline upload and channel read access", () => {
     const state = createOAuthState("workspace-1");
     expect(verifyOAuthState(state)?.workspaceId).toBe("workspace-1");
     expect(verifyOAuthState(`${state}tampered`)).toBeNull();
@@ -19,7 +19,10 @@ describe("YouTube OAuth and scheduling", () => {
     const url = new URL(getYouTubeAuthorizationUrl("https://app.test/api/youtube/callback", state));
     expect(url.origin).toBe("https://accounts.google.com");
     expect(url.searchParams.get("access_type")).toBe("offline");
-    expect(url.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/youtube.upload");
+    expect(new Set(url.searchParams.get("scope")?.split(" "))).toEqual(new Set([
+      "https://www.googleapis.com/auth/youtube.upload",
+      "https://www.googleapis.com/auth/youtube.readonly",
+    ]));
     expect(url.searchParams.get("state")).toBe(state);
   });
 

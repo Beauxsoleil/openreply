@@ -7,8 +7,9 @@ automation attachment remain isolated: YouTube posts cannot select a DM campaign
 ## Google setup
 
 1. Create or select a Google Cloud project and enable **YouTube Data API v3**.
-2. Configure the OAuth consent screen. Apps outside testing may need Google
-   verification for the `youtube.upload` scope.
+2. Configure the OAuth consent screen for `youtube.upload` and `youtube.readonly`.
+   The read-only scope is used only to identify the connected channel. Apps outside
+   testing may need Google verification for these scopes.
 3. Create an OAuth 2.0 **Web application** client.
 4. Add `<NEXTAUTH_URL>/api/youtube/callback` as an exact authorized redirect URI.
 5. Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in the web app and publishing

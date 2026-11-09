@@ -5,7 +5,7 @@ import { getBaseUrl } from "@/lib/env";
 import { encryptToken } from "@/lib/meta/oauth";
 import { canManageWorkspace } from "@/lib/workspace-access";
 import { getCurrentYouTubeChannel } from "@/lib/youtube/client";
-import { exchangeYouTubeCode, verifyOAuthState } from "@/lib/youtube/oauth";
+import { exchangeYouTubeCode, verifyOAuthState, YOUTUBE_SCOPES } from "@/lib/youtube/oauth";
 
 export const runtime = "nodejs";
 
@@ -43,14 +43,14 @@ export async function GET(request: NextRequest) {
         accessToken: encryptToken(tokens.access_token),
         refreshToken: encryptToken(tokens.refresh_token),
         tokenExpiresAt: new Date(Date.now() + tokens.expires_in * 1000),
-        scope: tokens.scope ?? "https://www.googleapis.com/auth/youtube.upload",
+        scope: tokens.scope ?? YOUTUBE_SCOPES.join(" "),
       },
       update: {
         ...channel,
         accessToken: encryptToken(tokens.access_token),
         refreshToken: encryptToken(tokens.refresh_token),
         tokenExpiresAt: new Date(Date.now() + tokens.expires_in * 1000),
-        scope: tokens.scope ?? "https://www.googleapis.com/auth/youtube.upload",
+        scope: tokens.scope ?? YOUTUBE_SCOPES.join(" "),
       },
     });
     return NextResponse.redirect(`${baseUrl}/publishing?youtube=connected`);
