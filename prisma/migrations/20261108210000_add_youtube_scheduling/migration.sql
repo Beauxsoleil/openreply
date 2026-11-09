@@ -1,3 +1,7 @@
+-- Keep the additive YouTube schema change atomic so a failed statement cannot
+-- leave production with only part of the publishing model installed.
+BEGIN;
+
 CREATE TYPE "PublishPlatform" AS ENUM ('INSTAGRAM', 'YOUTUBE');
 CREATE TYPE "YouTubePrivacy" AS ENUM ('PRIVATE', 'UNLISTED', 'PUBLIC');
 
@@ -38,3 +42,5 @@ ALTER TABLE "YouTubeChannel" ADD CONSTRAINT "YouTubeChannel_workspaceId_fkey"
   FOREIGN KEY ("workspaceId") REFERENCES "Workspace"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "ScheduledPost" ADD CONSTRAINT "ScheduledPost_youtubeChannelId_fkey"
   FOREIGN KEY ("youtubeChannelId") REFERENCES "YouTubeChannel"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+COMMIT;
