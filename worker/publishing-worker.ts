@@ -23,12 +23,16 @@ if (isDemoMode()) {
 
 const worker = createPublishingWorker();
 const startedAt = new Date().toISOString();
-const HEARTBEAT_INTERVAL_MS = 30_000;
+const HEARTBEAT_INTERVAL_MS = Number(
+  process.env.WORKER_HEARTBEAT_INTERVAL_MS ?? 60_000
+);
 // Reconciler safety net: rebuilds Redis jobs the database says should exist
 // (due posts with no live job) and recovers posts stuck mid-publish after a
 // crash. Runs in the worker because it must fire every minute and Vercel's
 // free crons only run once a day.
-const RECONCILE_INTERVAL_MS = 60_000;
+const RECONCILE_INTERVAL_MS = Number(
+  process.env.PUBLISH_RECONCILE_INTERVAL_MS ?? 5 * 60_000
+);
 
 console.log("[Publishing Worker] Started");
 

@@ -152,3 +152,21 @@ export async function getMediaObject(key: string, maxBytes: number): Promise<Buf
   }
   return Buffer.concat(chunks);
 }
+
+/** Read one inclusive byte range without buffering the full video in memory. */
+export async function getMediaObjectRange(
+  key: string,
+  start: number,
+  end: number
+): Promise<Buffer> {
+  const config = requireR2Config();
+  const response = await getR2Client(config).send(
+    new GetObjectCommand({
+      Bucket: config.bucket,
+      Key: key,
+      Range: `bytes=${start}-${end}`,
+    })
+  );
+  if (!response.Body) throw new Error(`R2 object ${key} has no body`);
+  return Buffer.from(await response.Body.transformToByteArray());
+}

@@ -10,6 +10,8 @@ export const runtime = "nodejs";
 
 const postSelect = {
   id: true,
+  platform: true,
+  title: true,
   caption: true,
   kind: true,
   status: true,
@@ -17,6 +19,10 @@ const postSelect = {
   timezone: true,
   publishedAt: true,
   instagramMediaId: true,
+  youtubeVideoId: true,
+  youtubePrivacy: true,
+  youtubeMadeForKids: true,
+  youtubeNotifySubscribers: true,
   containerId: true,
   lastError: true,
   attemptCount: true,
@@ -36,6 +42,7 @@ const postSelect = {
     },
   },
   instagramAccount: { select: { id: true, username: true } },
+  youtubeChannel: { select: { id: true, channelId: true, title: true } },
 } as const;
 
 /** byteSize is a BigInt in Prisma — JSON cannot carry it, so serialize as Number. */
@@ -127,10 +134,16 @@ export async function PATCH(
     }
     const timezone = input.timezone ?? post.timezone;
     const scheduleError = validateSchedule({
-      instagramAccountId: post.instagramAccount.id,
+      platform: post.platform,
+      instagramAccountId: post.instagramAccount?.id ?? null,
+      youtubeChannelId: post.youtubeChannel?.id ?? null,
       mediaAssetId: post.mediaAsset.id,
       kind: post.kind,
+      title: post.title,
       caption: post.caption,
+      youtubePrivacy: post.youtubePrivacy,
+      youtubeMadeForKids: post.youtubeMadeForKids,
+      youtubeNotifySubscribers: post.youtubeNotifySubscribers,
       scheduledAt: input.scheduledAt,
       timezone,
     });
@@ -150,7 +163,7 @@ export async function PATCH(
       data: { scheduledAt, timezone, status: "SCHEDULED", lastError: null, leaseUntil: null },
       select: postSelect,
     });
-    await enqueuePublish(post.id, scheduledAt);
+    await enqueuePublish(post.id, post.platform === "YOUTUBE" ? new Date() : scheduledAt);
     return NextResponse.json({ success: true, data: serializePost(updated as unknown as Record<string, unknown>) });
   }
 
@@ -168,7 +181,7 @@ export async function PATCH(
   if (input.automationActivateOnPublish && input.automationId === null) {
     return NextResponse.json({ success: false, error: "automationActivateOnPublish requires automationId" }, { status: 400 });
   }
-  if (input.automationId) {
+  if (input.automationId && post.instagramAccount) {
     const automation = await prisma.automation.findFirst({
       where: { id: input.automationId, workspaceId: context.workspaceId, instagramAccountId: post.instagramAccount.id },
       select: { id: true },

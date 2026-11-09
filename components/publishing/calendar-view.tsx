@@ -153,8 +153,8 @@ export default function CalendarView({ posts, onSelect }: CalendarViewProps) {
                 onClick={() => onSelect(post)}
                 className="rounded-lg border border-border bg-surface px-3 py-2 text-left text-sm hover:border-border-hover"
               >
-                <span className="font-medium">{post.kind === "REEL" ? "Reel" : "Image"}</span>{" "}
-                <span className="text-muted">@{post.instagramAccount.username}</span>
+                <span className="font-medium">{post.kind === "REEL" ? "Reel" : post.kind === "IMAGE" ? "Image" : post.kind === "SHORT" ? "Short" : "Video"}</span>{" "}
+                <span className="text-muted">{post.platform === "YOUTUBE" ? post.youtubeChannel?.title : `@${post.instagramAccount?.username}`}</span>
                 {post.caption && <span className="block max-w-56 truncate text-muted">{post.caption}</span>}
               </button>
             ))}
@@ -202,7 +202,7 @@ export default function CalendarView({ posts, onSelect }: CalendarViewProps) {
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium">{post.caption || `${post.kind} post`}</p>
                 <p className="text-xs text-muted">
-                  @{post.instagramAccount.username} · {post.kind === "REEL" ? "Reel" : "Image"} · {formatPostTime(post.scheduledAt, post.timezone)}
+                  {post.platform === "YOUTUBE" ? post.youtubeChannel?.title : `@${post.instagramAccount?.username}`} · {post.kind === "REEL" ? "Reel" : post.kind === "IMAGE" ? "Image" : post.kind === "SHORT" ? "Short" : "Video"} · {formatPostTime(post.scheduledAt, post.timezone)}
                 </p>
               </div>
               <StatusPill status={post.status} />

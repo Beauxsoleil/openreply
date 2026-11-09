@@ -81,6 +81,7 @@ model Workspace {
   scheduledPosts    ScheduledPost[]
   mediaAssets       MediaAsset[]
   instagramAccounts InstagramAccount[]
+  youtubeChannels   YouTubeChannel[]
   automations       Automation[]
   dmLogs            DmLog[]
   trackedLinks      TrackedLink[]
@@ -90,6 +91,24 @@ model Workspace {
   serviceKeys       ServiceKey[]
 
   @@index([ownerId])
+}
+
+model YouTubeChannel {
+  id                   String   @id @default(cuid())
+  workspaceId          String
+  channelId            String   @unique
+  title                String
+  thumbnailUrl         String?
+  accessToken          String
+  refreshToken         String
+  tokenExpiresAt       DateTime
+  scope                String
+  connectedAt          DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  workspace            Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  scheduledPosts       ScheduledPost[]
+
+  @@index([workspaceId])
 }
 
 model WorkspaceMember {
@@ -509,8 +528,11 @@ model MediaAsset {
 model ScheduledPost {
   id                 String @id @default(cuid())
   workspaceId        String
-  instagramAccountId String
+  platform           PublishPlatform @default(INSTAGRAM)
+  instagramAccountId String?
+  youtubeChannelId   String?
   mediaAssetId       String
+  title              String?
   caption            String @default("")
   kind               PublishKind
   status             PublishStatus @default(DRAFT)
@@ -518,6 +540,11 @@ model ScheduledPost {
   timezone           String @default("UTC")
   publishedAt        DateTime?
   instagramMediaId   String?
+  youtubeVideoId     String?
+  youtubeUploadUrl   String?
+  youtubePrivacy     YouTubePrivacy?
+  youtubeMadeForKids Boolean?
+  youtubeNotifySubscribers Boolean @default(true)
   containerId        String?
   lastError          String?
   attemptCount       Int @default(0)
@@ -529,13 +556,15 @@ model ScheduledPost {
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
   workspace          Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  instagramAccount   InstagramAccount @relation(fields: [instagramAccountId], references: [id], onDelete: Cascade)
+  instagramAccount   InstagramAccount? @relation(fields: [instagramAccountId], references: [id], onDelete: Cascade)
+  youtubeChannel     YouTubeChannel? @relation(fields: [youtubeChannelId], references: [id], onDelete: Cascade)
   mediaAsset         MediaAsset @relation(fields: [mediaAssetId], references: [id], onDelete: Restrict)
   automation         Automation? @relation(fields: [automationId], references: [id], onDelete: SetNull)
   attempts           PublishAttempt[]
   @@index([status, scheduledAt])
   @@index([workspaceId, scheduledAt])
   @@index([instagramAccountId, scheduledAt])
+  @@index([youtubeChannelId, scheduledAt])
 }
 
 model PublishAttempt {
@@ -554,6 +583,19 @@ model PublishAttempt {
 enum PublishKind {
   IMAGE
   REEL
+  VIDEO
+  SHORT
+}
+
+enum PublishPlatform {
+  INSTAGRAM
+  YOUTUBE
+}
+
+enum YouTubePrivacy {
+  PRIVATE
+  UNLISTED
+  PUBLIC
 }
 
 enum PublishStatus {

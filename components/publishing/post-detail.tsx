@@ -205,7 +205,7 @@ export default function PostDetail({ post, onClose, onChanged }: PostDetailProps
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-              {post.kind === "REEL" ? "Reel" : "Image"} · @{post.instagramAccount.username}
+              {post.kind === "REEL" ? "Reel" : post.kind === "IMAGE" ? "Image" : post.kind === "SHORT" ? "Short" : "Video"} · {post.platform === "YOUTUBE" ? post.youtubeChannel?.title : `@${post.instagramAccount?.username}`}
             </p>
             <h2 className="mt-1 text-lg font-semibold">Post details</h2>
           </div>
@@ -247,12 +247,12 @@ export default function PostDetail({ post, onClose, onChanged }: PostDetailProps
             <div className="rounded-lg border border-border bg-surface p-3 text-sm">
               <p>
                 <a
-                  href={`https://www.instagram.com/${post.instagramAccount.username}/`}
+                  href={post.platform === "YOUTUBE" && post.youtubeVideoId ? `https://www.youtube.com/watch?v=${post.youtubeVideoId}` : `https://www.instagram.com/${post.instagramAccount?.username}/`}
                   target="_blank"
                   rel="noreferrer"
                   className="font-medium text-accent hover:underline"
                 >
-                  View @{post.instagramAccount.username} on Instagram
+                  {post.platform === "YOUTUBE" ? "View video on YouTube" : `View @${post.instagramAccount?.username} on Instagram`}
                 </a>
               </p>
               {post.instagramMediaId && (

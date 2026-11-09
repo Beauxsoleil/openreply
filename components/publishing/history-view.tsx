@@ -37,7 +37,7 @@ function HistoryRow({
             {post.caption || `${post.kind} post`}
           </p>
           <p className="text-xs text-muted">
-            @{post.instagramAccount.username} · {post.kind === "REEL" ? "Reel" : "Image"}
+            {post.platform === "YOUTUBE" ? post.youtubeChannel?.title : `@${post.instagramAccount?.username}`} · {post.kind === "REEL" ? "Reel" : post.kind === "IMAGE" ? "Image" : post.kind === "SHORT" ? "Short" : "Video"}
           </p>
         </button>
         <StatusPill status={post.status} />
@@ -87,12 +87,12 @@ export default function HistoryView({ posts, onSelect, onChanged }: HistoryViewP
                 </p>
                 <p className="text-sm">
                   <a
-                    href={`https://www.instagram.com/${post.instagramAccount.username}/`}
+                    href={post.platform === "YOUTUBE" && post.youtubeVideoId ? `https://www.youtube.com/watch?v=${post.youtubeVideoId}` : `https://www.instagram.com/${post.instagramAccount?.username}/`}
                     target="_blank"
                     rel="noreferrer"
                     className="font-medium text-accent hover:underline"
                   >
-                    View @{post.instagramAccount.username} on Instagram
+                    {post.platform === "YOUTUBE" ? "View video on YouTube" : `View @${post.instagramAccount?.username} on Instagram`}
                   </a>
                   {post.instagramMediaId && (
                     <span className="ml-2 font-mono text-xs text-muted">Media ID: {post.instagramMediaId}</span>
@@ -133,7 +133,7 @@ export default function HistoryView({ posts, onSelect, onChanged }: HistoryViewP
                 )}
                 {post.status === "RECONCILE_REQUIRED" && (
                   <p className="text-xs text-muted">
-                    Check @{post.instagramAccount.username} on Instagram first — the post may already be live.
+                    Check {post.platform === "YOUTUBE" ? "the connected YouTube channel" : `@${post.instagramAccount?.username} on Instagram`} first — the post may already be live.
                   </p>
                 )}
               </HistoryRow>

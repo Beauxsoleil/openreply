@@ -10,7 +10,8 @@ function alertsKey(worker: WorkerName): string {
   return `alerts:worker:${worker}`;
 }
 
-const WORKER_HEARTBEAT_TTL_SECONDS = 120;
+// Allow two missed 60-second heartbeats before reporting the worker down.
+const WORKER_HEARTBEAT_TTL_SECONDS = 180;
 
 export interface WorkerHeartbeat {
   status: "running";
