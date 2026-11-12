@@ -6,6 +6,7 @@
 
 import { Queue } from "bullmq";
 import Redis from "ioredis";
+import { redisRetryDelayMs } from "./redis-errors";
 
 let connection: Redis | null = null;
 
@@ -14,6 +15,21 @@ export function getRedisConnection(): Redis {
     connection = new Redis(process.env.REDIS_URL!, {
       maxRetriesPerRequest: null, // Required by BullMQ
       enableReadyCheck: false, // Recommended by BullMQ for worker (blocking) connections
+      // Bound the reconnect loop: without a cap, a dead Redis (e.g. an
+      // exhausted Upstash quota) is re-dialled every couple of seconds
+      // forever, and each reconnect attempt costs quota on AUTH. Capped
+      // exponential backoff still reconnects on its own after a transient
+      // outage. Never null: ioredis must keep reconnecting for BullMQ.
+      retryStrategy: (times) => redisRetryDelayMs(times),
+    });
+    // ioredis emits "error" on every failed reconnect; without a listener
+    // Node throws. Throttled so an outage doesn't flood the logs.
+    let lastErrorLogAt = 0;
+    connection.on("error", (err) => {
+      const now = Date.now();
+      if (now - lastErrorLogAt < 60_000) return;
+      lastErrorLogAt = now;
+      console.error("[Redis] Connection error:", err.message);
     });
   }
   return connection;

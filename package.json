@@ -13,6 +13,7 @@
     "db:seed-demo": "tsx prisma/seed-demo.ts",
     "worker": "tsx worker/dm-worker.ts",
     "worker:publishing": "tsx worker/publishing-worker.ts",
+    "prune:operational-events": "tsx scripts/prune-operational-events.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

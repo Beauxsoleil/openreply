@@ -5,7 +5,7 @@
 // load .env the way `next dev` does.
 import "dotenv/config";
 
-import { createDMWorker } from "@/lib/queue/dm-worker";
+import { createDMWorker, checkWorkerCircuit } from "@/lib/queue/dm-worker";
 import { recordWorkerHeartbeat } from "@/lib/ops/worker-health";
 import { reconcileComments } from "@/lib/polling/comment-reconciler";
 import { attachPendingNextReels } from "@/lib/automation/attach-next-reel";
@@ -62,6 +62,15 @@ async function poll() {
   }
 }
 
+// Circuit-breaker recovery check: no-op while the worker is running, and
+// the breaker itself only pings Redis once its resume interval has elapsed
+// (default 5 min), so this timer costs nothing in the healthy case.
+const CIRCUIT_CHECK_INTERVAL_MS = 60_000;
+const circuitTimer = setInterval(
+  () => void checkWorkerCircuit(),
+  CIRCUIT_CHECK_INTERVAL_MS
+);
+
 // Kick off one sweep shortly after boot, then on a fixed interval.
 setTimeout(() => void poll(), 10_000);
 const pollTimer = setInterval(() => void poll(), POLL_INTERVAL_MS);
@@ -70,6 +79,7 @@ async function shutdown(signal: string) {
   console.log(`[DM Worker] ${signal} received, closing worker`);
   clearInterval(heartbeatTimer);
   clearInterval(pollTimer);
+  clearInterval(circuitTimer);
   await worker.close();
   process.exit(0);
 }

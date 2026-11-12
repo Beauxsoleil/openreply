@@ -15,6 +15,7 @@
  */
 
 import Redis from "ioredis";
+import { redisRetryDelayMs } from "@/lib/queue/redis-errors";
 
 const RATE_LIMIT_MAX = 750; // private replies per hour, per Meta's documented cap
 const RATE_LIMIT_WINDOW = 3600; // 1 hour in seconds
@@ -25,8 +26,16 @@ let redis: Redis | null = null;
 
 function getRedis(): Redis {
   if (!redis) {
+    // This client is NOT a BullMQ connection, so it must not inherit
+    // BullMQ's `maxRetriesPerRequest: null`: with an unbounded offline
+    // queue, a Redis outage let commands pile up and all fire at once on
+    // reconnect. Fail fast instead — callers treat a Redis error as a job
+    // failure, and the worker's circuit breaker pauses the queue.
     redis = new Redis(process.env.REDIS_URL!, {
-      maxRetriesPerRequest: null, // required by BullMQ
+      maxRetriesPerRequest: 2,
+      enableOfflineQueue: false,
+      connectTimeout: 3000,
+      retryStrategy: (times) => redisRetryDelayMs(times, 10_000),
     });
   }
   return redis;

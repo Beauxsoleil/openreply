@@ -146,6 +146,7 @@ vi.mock("bullmq", () => {
 });
 
 import { MetaApiError, RateLimitError, TokenExpiredError } from "@/lib/meta/client";
+import { UnrecoverableError } from "bullmq";
 import { createDMWorker } from "../lib/queue/dm-worker";
 import { getRedisConnection } from "@/lib/queue/client";
 import { hashRecipientId } from "@/lib/tracking/server";
@@ -311,6 +312,40 @@ beforeEach(() => {
     message_id: "msg_006",
   });
   mockGetUserFollowStatus.mockResolvedValue(true);
+});
+
+describe("DM Worker — Redis failure fail-fast", () => {
+  // A Redis that rejects auth or has exhausted its quota fails the next
+  // attempt exactly the same way, so the job must fail without BullMQ
+  // retries (each retry burned quota and wrote another failure row in
+  // November 2026). The worker-level handler pauses the consumer.
+  it("fails a job without retrying when Redis auth is invalid", async () => {
+    mockReserveDMSlot.mockRejectedValue(
+      new Error("WRONGPASS invalid username-password pair")
+    );
+    await expect(getProcessor()(createMockJob())).rejects.toThrow(
+      UnrecoverableError
+    );
+  });
+
+  it("fails a job without retrying when the Upstash quota is exhausted", async () => {
+    mockReserveDMSlot.mockRejectedValue(
+      new Error(
+        "ERR max requests limit exceeded (limit 500,000, usage 500,005)"
+      )
+    );
+    await expect(getProcessor()(createMockJob())).rejects.toThrow(
+      UnrecoverableError
+    );
+  });
+
+  it("still retries ordinary transient failures", async () => {
+    mockReserveDMSlot.mockRejectedValue(new Error("Connection is closed."));
+    const error = await getProcessor()(createMockJob()).catch((e) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(UnrecoverableError);
+    expect((error as Error).message).toBe("Connection is closed.");
+  });
 });
 
 describe("DM Worker — comments left on an ad", () => {
