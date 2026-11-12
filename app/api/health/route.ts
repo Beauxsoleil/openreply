@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/client";
 import { getDMQueue, getRedisConnection } from "@/lib/queue/client";
 import { getWorkerHealth } from "@/lib/ops/worker-health";
+import { checkOperationalEventGrowth } from "@/lib/ops/db-growth";
 
 export const runtime = "nodejs";
 // Health must reflect live state (worker heartbeat, queue depth), never a
@@ -80,24 +81,49 @@ async function checkQueue(): Promise<HealthCheck & { counts?: unknown }> {
   }
 }
 
+// A flooding error log filled Neon in November 2026 (~2.3M
+// OperationalEvent rows in six days) before anything noticed. A critical
+// growth rate degrades health so the uptime monitor alerts; a warning
+// stays visible in the detail without paging.
+async function checkOperationalEvents(): Promise<HealthCheck> {
+  try {
+    const growth = await checkOperationalEventGrowth(prisma);
+    if (growth.status === "critical") {
+      return { status: "error", detail: growth.detail };
+    }
+    return { status: "ok", detail: growth.detail };
+  } catch (error) {
+    return {
+      status: "error",
+      detail:
+        error instanceof Error
+          ? error.message
+          : "OperationalEvent check failed",
+    };
+  }
+}
+
 export async function GET() {
-  const [database, redis, queue, worker] = await Promise.all([
-    checkDatabase(),
-    checkRedis(),
-    checkQueue(),
-    getWorkerHealth().catch((error) => ({
-      healthy: false,
-      heartbeat: null,
-      ageMs: null,
-      error: error instanceof Error ? error.message : "Worker check failed",
-    })),
-  ]);
+  const [database, redis, queue, worker, operationalEvents] =
+    await Promise.all([
+      checkDatabase(),
+      checkRedis(),
+      checkQueue(),
+      getWorkerHealth().catch((error) => ({
+        healthy: false,
+        heartbeat: null,
+        ageMs: null,
+        error: error instanceof Error ? error.message : "Worker check failed",
+      })),
+      checkOperationalEvents(),
+    ]);
 
   const healthy =
     database.status === "ok" &&
     redis.status === "ok" &&
     queue.status === "ok" &&
-    worker.healthy;
+    worker.healthy &&
+    operationalEvents.status === "ok";
 
   return NextResponse.json(
     {
@@ -107,6 +133,7 @@ export async function GET() {
         redis,
         queue,
         worker,
+        operationalEvents,
       },
     },
     { status: healthy ? 200 : 503 }

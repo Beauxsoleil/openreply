@@ -52,6 +52,16 @@ import {
   reserveWorkspaceDMSend,
 } from "@/lib/billing/usage";
 import { recordWorkerAlert } from "@/lib/ops/worker-health";
+import { recordOperationalError } from "@/lib/ops/error-log";
+import {
+  classifyRedisError,
+  isRedisAuthError,
+  isRedisQuotaError,
+} from "./redis-errors";
+import {
+  WorkerCircuitBreaker,
+  type CircuitTripReason,
+} from "./worker-circuit";
 import {
   buildTrackedUrl,
   renderMessageWithTracking,
@@ -1284,8 +1294,10 @@ async function processPostback(job: Job<ProcessPostbackJob>): Promise<void> {
       });
       // The prompt is a DM send too, so it reserves a slot like the reveal
       // does. A requeue or skip returns here; the job runs again later. A
-      // Redis failure propagates so BullMQ retries the job, as the comment
-      // path does, rather than sending over the cap unchecked.
+      // transient Redis failure propagates so BullMQ retries the job, as
+      // the comment path does, rather than sending over the cap unchecked.
+      // (Auth/quota failures instead fail fast in processJob and trip the
+      // circuit breaker — retrying those can only fail identically.)
       const promptRateLimit = await acquireDMSlot({
         instagramAccountId,
         requeueAttempt,
@@ -2037,6 +2049,14 @@ async function processJob(job: Job<DmQueueJob>): Promise<void> {
     // format across every UnrecoverableError thrown from this worker.
     if (isDeliveryUnconfirmed(error))
       throw new UnrecoverableError(formatError(error));
+    // A Redis that rejects auth or has exhausted its quota will fail the
+    // next attempt exactly the same way: retrying only burns the remaining
+    // quota and writes another failure row per attempt. Fail fast instead;
+    // the worker-level "failed" handler pauses the consumer (circuit
+    // breaker) and the comment sweep re-enqueues the comment once Redis
+    // recovers.
+    if (isRedisAuthError(error) || isRedisQuotaError(error))
+      throw new UnrecoverableError(formatError(error));
     throw error;
   }
 }
@@ -2049,25 +2069,30 @@ async function recordWorkerFailure(
     const instagramAccountId = job?.data.instagramAccountId;
     const commentId =
       job && "commentId" in job.data ? job.data.commentId : null;
-    const account = instagramAccountId
-      ? await prisma.instagramAccount.findUnique({
-          where: { instagramId: instagramAccountId },
-          select: { workspaceId: true },
-        })
-      : null;
 
-    await prisma.operationalEvent.create({
-      data: {
-        workspaceId: account?.workspaceId ?? null,
-        source: "WORKER",
-        level: "ERROR",
-        message: `DM worker job ${job?.id ?? "unknown"} failed: ${error.message}`,
-        payload: {
-          jobId: job?.id ?? null,
-          attemptsMade: job?.attemptsMade ?? null,
-          instagramAccountId: instagramAccountId ?? null,
-          commentId,
-        },
+    // Deduped + rate-limited: identical failures collapse into one row with
+    // an occurrence count instead of one row per failure (November 2026:
+    // ~2.3M rows from a single repeating Redis error). The workspace lookup
+    // is lazy — it only runs when a new row is actually written, so
+    // duplicates cost no database queries at all.
+    await recordOperationalError({
+      workspaceId: instagramAccountId
+        ? async () => {
+            const account = await prisma.instagramAccount.findUnique({
+              where: { instagramId: instagramAccountId },
+              select: { workspaceId: true },
+            });
+            return account?.workspaceId ?? null;
+          }
+        : null,
+      source: "WORKER",
+      level: "ERROR",
+      message: `DM worker job ${job?.id ?? "unknown"} failed: ${error.message}`,
+      payload: {
+        jobId: job?.id ?? null,
+        attemptsMade: job?.attemptsMade ?? null,
+        instagramAccountId: instagramAccountId ?? null,
+        commentId,
       },
     });
 
@@ -2082,6 +2107,67 @@ async function recordWorkerFailure(
     console.error(
       "[DM Worker] Failed to record worker failure:",
       formatError(recordError)
+    );
+  }
+}
+
+// Circuit breaker for the BullMQ consumer: trips on Redis quota/auth
+// failures so jobs stay queued instead of failing in a loop. The worker
+// entrypoint (worker/dm-worker.ts) calls checkWorkerCircuit() every minute;
+// the breaker only pings Redis once its resume interval has elapsed.
+const circuitBreaker = new WorkerCircuitBreaker({
+  resumeCheckIntervalMs: Number(
+    process.env.WORKER_CIRCUIT_RESUME_CHECK_MS ?? 5 * 60_000
+  ),
+});
+
+let dmWorkerInstance: Worker<DmQueueJob> | null = null;
+
+async function tripWorkerCircuit(
+  worker: Worker<DmQueueJob>,
+  reason: CircuitTripReason
+): Promise<void> {
+  try {
+    await circuitBreaker.trip(worker, reason);
+  } catch (error) {
+    console.error(
+      "[DM Worker] Failed to pause worker after circuit trip:",
+      error instanceof Error ? error.message : "Unknown error"
+    );
+  }
+}
+
+export function getWorkerCircuitState(): {
+  paused: boolean;
+  reason: CircuitTripReason | null;
+  pausedSince: number | null;
+} {
+  return {
+    paused: circuitBreaker.isPaused,
+    reason: circuitBreaker.pauseReason,
+    pausedSince: circuitBreaker.pausedSince,
+  };
+}
+
+/**
+ * Recovery check for a tripped circuit breaker. No-op when the worker is
+ * not paused; otherwise pings Redis once the resume interval has elapsed
+ * and resumes the worker on success. Safe to call on a timer.
+ */
+export async function checkWorkerCircuit(): Promise<void> {
+  if (!dmWorkerInstance || !circuitBreaker.isPaused) return;
+  try {
+    await circuitBreaker.maybeResume(dmWorkerInstance, async () => {
+      try {
+        return (await getRedisConnection().ping()) === "PONG";
+      } catch {
+        return false;
+      }
+    });
+  } catch (error) {
+    console.error(
+      "[DM Worker] Circuit resume check failed:",
+      error instanceof Error ? error.message : "Unknown error"
     );
   }
 }
@@ -2105,27 +2191,31 @@ export function createDMWorker(): Worker<DmQueueJob> {
       `[DM Worker] Job ${job?.id} failed (attempt ${job?.attemptsMade}):`,
       err.message
     );
+    // Quota/auth failures are systemic, not per-job: pause the consumer so
+    // the remaining queued jobs stop failing the same way. They stay queued
+    // and run once the breaker resumes the worker.
+    const kind = classifyRedisError(err);
+    if (kind === "quota") void tripWorkerCircuit(worker, "redis-quota");
+    else if (kind === "auth") void tripWorkerCircuit(worker, "redis-auth");
     void recordWorkerFailure(job, err);
   });
 
   worker.on("error", (err) => {
     console.error("[DM Worker] Worker error:", err.message);
-    void prisma.operationalEvent
-      .create({
-        data: {
-          source: "WORKER",
-          level: "ERROR",
-          message: `DM worker process error: ${err.message}`,
-          payload: { name: err.name },
-        },
-      })
-      .catch((recordError) => {
-        console.error(
-          "[DM Worker] Failed to record worker process error:",
-          formatError(recordError)
-        );
-      });
+    const kind = classifyRedisError(err);
+    if (kind === "quota") void tripWorkerCircuit(worker, "redis-quota");
+    else if (kind === "auth") void tripWorkerCircuit(worker, "redis-auth");
+    // Deduped like job failures: worker-level errors (e.g. a Redis
+    // connection error from BullMQ internals) fire repeatedly during an
+    // outage and used to write one row per event.
+    void recordOperationalError({
+      source: "WORKER",
+      level: "ERROR",
+      message: `DM worker process error: ${err.message}`,
+      payload: { name: err.name },
+    });
   });
 
+  dmWorkerInstance = worker;
   return worker;
 }
