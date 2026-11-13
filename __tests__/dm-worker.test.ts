@@ -346,6 +346,72 @@ describe("DM Worker — Redis failure fail-fast", () => {
     expect(error).not.toBeInstanceOf(UnrecoverableError);
     expect((error as Error).message).toBe("Connection is closed.");
   });
+
+  it("still retries a postback job when Redis auth is invalid", async () => {
+    // Only process-comment jobs fail fast on Redis auth/quota: the sweep
+    // re-enqueues those, but a postback reply has no second chance, so it
+    // keeps the normal bounded retry path instead of failing permanently.
+    mockPrisma.automation.findFirst.mockResolvedValue(mockAutomation);
+    mockReserveDMSlot.mockRejectedValue(
+      new Error("WRONGPASS invalid username-password pair")
+    );
+    const error = await getProcessor()(createMockPostbackJob()).catch(
+      (e) => e
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(UnrecoverableError);
+    expect((error as Error).message).toContain("WRONGPASS");
+  });
+
+  it("still retries a follow-up job when Redis auth is invalid", async () => {
+    mockPrisma.automation.findFirst.mockResolvedValue({
+      ...mockAutomation,
+      followUpEnabled: true,
+      followUpMessage: "Thanks for following up!",
+    });
+    mockReserveDMSlot.mockRejectedValue(
+      new Error("WRONGPASS invalid username-password pair")
+    );
+    const error = await getProcessor()({
+      name: "process-followup",
+      data: {
+        instagramAccountId: "ig_456",
+        userId: "commenter_999",
+        automationId: "auto_789",
+        commenterName: "commenter_user",
+      },
+      id: "followup_job_001",
+      attemptsMade: 0,
+    }).catch((e) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(UnrecoverableError);
+    expect((error as Error).message).toContain("WRONGPASS");
+  });
+
+  it("still retries an inbound-message job when the Upstash quota is exhausted", async () => {
+    mockPrisma.automation.findMany.mockResolvedValue([
+      { ...mockAutomation, dmTriggerEnabled: true },
+    ]);
+    mockReserveDMSlot.mockRejectedValue(
+      new Error(
+        "ERR max requests limit exceeded (limit 500,000, usage 500,005)"
+      )
+    );
+    const error = await getProcessor()({
+      name: "process-message",
+      data: {
+        instagramAccountId: "ig_456",
+        messageId: "mid_abc",
+        messageText: "can I get the LINK?",
+        senderId: "commenter_999",
+      },
+      id: "message_job_001",
+      attemptsMade: 0,
+    }).catch((e) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(UnrecoverableError);
+    expect((error as Error).message).toContain("max requests limit exceeded");
+  });
 });
 
 describe("DM Worker — comments left on an ad", () => {

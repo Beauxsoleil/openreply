@@ -2051,11 +2051,23 @@ async function processJob(job: Job<DmQueueJob>): Promise<void> {
       throw new UnrecoverableError(formatError(error));
     // A Redis that rejects auth or has exhausted its quota will fail the
     // next attempt exactly the same way: retrying only burns the remaining
-    // quota and writes another failure row per attempt. Fail fast instead;
-    // the worker-level "failed" handler pauses the consumer (circuit
-    // breaker) and the comment sweep re-enqueues the comment once Redis
-    // recovers.
-    if (isRedisAuthError(error) || isRedisQuotaError(error))
+    // quota and writes another failure row per attempt. Fail fast — but
+    // only for process-comment jobs. The comment sweep re-enqueues those
+    // once Redis recovers; postback, follow-up, and message jobs have no
+    // such second chance (reconcileComments only recreates process-comment
+    // jobs), so they keep the normal bounded retry path instead of losing
+    // the user's reply permanently on first attempt. The worker-level
+    // "failed" handler pauses the consumer (circuit breaker) on quota/auth
+    // failures either way, so those retries do not burn quota while Redis
+    // is down.
+    const isCommentJob =
+      job.name !== POSTBACK_JOB_NAME &&
+      job.name !== FOLLOWUP_JOB_NAME &&
+      job.name !== MESSAGE_JOB_NAME;
+    if (
+      isCommentJob &&
+      (isRedisAuthError(error) || isRedisQuotaError(error))
+    )
       throw new UnrecoverableError(formatError(error));
     throw error;
   }

@@ -7,11 +7,18 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { mockGet, mockEval, mockDel, mockDecr } = vi.hoisted(() => ({
+const { mockGet, mockEval, mockDel, mockDecr, redisState } = vi.hoisted(() => ({
   mockGet: vi.fn(),
   mockEval: vi.fn(),
   mockDel: vi.fn(),
   mockDecr: vi.fn(),
+  // Mutable connection state so tests can simulate a client that is still
+  // connecting when the first command is issued.
+  redisState: {
+    status: "ready",
+    readyHandler: null as (() => void) | null,
+    errorHandler: null as ((error: Error) => void) | null,
+  },
 }));
 
 vi.mock("ioredis", () => {
@@ -22,6 +29,16 @@ vi.mock("ioredis", () => {
     this.eval = mockEval;
     this.del = mockDel;
     this.decr = mockDecr;
+    this.on = vi.fn();
+    this.once = (event: string, handler: (...args: unknown[]) => void) => {
+      if (event === "ready") redisState.readyHandler = handler as () => void;
+      else if (event === "error")
+        redisState.errorHandler = handler as (error: Error) => void;
+    };
+    this.off = vi.fn();
+    Object.defineProperty(this, "status", {
+      get: () => redisState.status,
+    });
     return this;
   });
   return { default: MockRedis };
@@ -39,6 +56,65 @@ import {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  redisState.status = "ready";
+  redisState.readyHandler = null;
+  redisState.errorHandler = null;
+});
+
+describe("readiness", () => {
+  it("waits for Redis to be ready before issuing the first reserve", async () => {
+    redisState.status = "connecting";
+    mockEval.mockResolvedValue([1, 51, 139]);
+
+    const promise = reserveDMSlot("account_123");
+    // No command while the client is still connecting: with
+    // enableOfflineQueue:false an immediate eval would be rejected.
+    expect(mockEval).not.toHaveBeenCalled();
+
+    redisState.status = "ready";
+    redisState.readyHandler?.();
+    const result = await promise;
+
+    expect(mockEval).toHaveBeenCalledWith(
+      expect.any(String),
+      1,
+      "rate:dm:account_123",
+      RATE_LIMIT_MAX,
+      3600
+    );
+    expect(result.allowed).toBe(true);
+    expect(result.reserved).toBe(true);
+  });
+
+  it("waits for Redis to be ready before checking the count", async () => {
+    redisState.status = "connecting";
+    mockGet.mockResolvedValue("50");
+
+    const promise = checkRateLimit("account_123");
+    expect(mockGet).not.toHaveBeenCalled();
+
+    redisState.status = "ready";
+    redisState.readyHandler?.();
+    const result = await promise;
+
+    expect(mockGet).toHaveBeenCalledWith("rate:dm:account_123");
+    expect(result.allowed).toBe(true);
+    expect(result.currentCount).toBe(50);
+  });
+
+  it("fails fast when Redis never becomes ready", async () => {
+    vi.useFakeTimers();
+    try {
+      redisState.status = "connecting";
+      const promise = reserveDMSlot("account_123");
+      const assertion = expect(promise).rejects.toThrow(/become ready/);
+      await vi.advanceTimersByTimeAsync(3000);
+      await assertion;
+      expect(mockEval).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("checkRateLimit", () => {

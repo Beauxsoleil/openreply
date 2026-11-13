@@ -72,7 +72,8 @@ export interface ErrorLogDeduperOptions {
 }
 
 interface SeenEntry {
-  rowId: string;
+  /** Null while the first row for this signature is still being created. */
+  rowId: string | null;
   firstSeenAt: number;
   lastSeenAt: number;
   occurrences: number;
@@ -151,12 +152,16 @@ export class ErrorLogDeduper {
     // Same error inside the window: count it, write nothing. Every
     // `flushEveryOccurrences` duplicates, refresh the row's payload so the
     // count and last-seen time stay visible without a row per failure.
+    // A rowId of null means the first create is still in flight: the
+    // duplicates are counted on the placeholder and flushed once the row
+    // exists (see below), never written as extra rows.
     if (entry && now - entry.firstSeenAt < this.dedupeWindowMs) {
       entry.occurrences += 1;
       entry.lastSeenAt = now;
       if (
+        entry.rowId &&
         entry.occurrences - entry.lastFlushedOccurrences >=
-        this.flushEveryOccurrences
+          this.flushEveryOccurrences
       ) {
         entry.lastFlushedOccurrences = entry.occurrences;
         await writer.update(entry.rowId, {
@@ -167,37 +172,66 @@ export class ErrorLogDeduper {
     }
 
     // New signature (or the window expired): the per-minute cap bounds the
-    // worst case when every error is distinct.
+    // worst case when every error is distinct. The cap slot and the
+    // signature are reserved synchronously, before the first await: the
+    // checks above run before any await, so without the reservation
+    // concurrent identical errors would each see no entry, each pass the
+    // cap, and each create a row (30 simultaneous identical errors made
+    // 30 rows — the exact outage path this module guards, since the
+    // worker runs 5 jobs concurrently and logs without awaiting).
     this.newRowAt = this.newRowAt.filter((t) => now - t < 60_000);
     if (this.newRowAt.length >= this.maxNewRowsPerMinute) {
       await this.noteSuppressed(writer, now);
       return "suppressed";
     }
-
-    const workspaceId =
-      typeof input.workspaceId === "function"
-        ? await input.workspaceId()
-        : (input.workspaceId ?? null);
-    const row = await writer.create({
-      workspaceId,
-      source: input.source,
-      level: input.level,
-      message: input.message,
-      payload: {
-        ...(input.payload ?? {}),
-        dedupSignature: signature,
-        occurrences: 1,
-        firstSeenAt: new Date(now).toISOString(),
-      },
-    });
     this.newRowAt.push(now);
-    this.remember(signature, {
-      rowId: row.id,
+    const pending: SeenEntry = {
+      rowId: null,
       firstSeenAt: now,
       lastSeenAt: now,
       occurrences: 1,
       lastFlushedOccurrences: 1,
-    });
+    };
+    this.remember(signature, pending);
+
+    let row: { id: string };
+    try {
+      const workspaceId =
+        typeof input.workspaceId === "function"
+          ? await input.workspaceId()
+          : (input.workspaceId ?? null);
+      row = await writer.create({
+        workspaceId,
+        source: input.source,
+        level: input.level,
+        message: input.message,
+        payload: {
+          ...(input.payload ?? {}),
+          dedupSignature: signature,
+          occurrences: 1,
+          firstSeenAt: new Date(now).toISOString(),
+        },
+      });
+    } catch (error) {
+      // The row was never written: release both reservations so the next
+      // identical error retries instead of deduping against a phantom row.
+      this.forget(signature, pending);
+      const slot = this.newRowAt.lastIndexOf(now);
+      if (slot !== -1) this.newRowAt.splice(slot, 1);
+      throw error;
+    }
+    pending.rowId = row.id;
+    // Duplicates may have piled up on the placeholder while the create
+    // was in flight; flush the count once so it is not lost.
+    if (
+      pending.occurrences - pending.lastFlushedOccurrences >=
+      this.flushEveryOccurrences
+    ) {
+      pending.lastFlushedOccurrences = pending.occurrences;
+      await writer.update(row.id, {
+        payload: this.countPayload(input, signature, pending),
+      });
+    }
     return "logged";
   }
 
@@ -222,6 +256,14 @@ export class ErrorLogDeduper {
       if (oldest !== undefined) this.seen.delete(oldest);
     }
     this.seen.set(signature, entry);
+  }
+
+  /**
+   * Drop a reservation, but only if it is still the placeholder this call
+   * made — a newer reservation for the same signature must survive.
+   */
+  private forget(signature: string, entry: SeenEntry): void {
+    if (this.seen.get(signature) === entry) this.seen.delete(signature);
   }
 
   private async noteSuppressed(

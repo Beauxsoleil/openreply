@@ -157,6 +157,50 @@ describe("ErrorLogDeduper", () => {
     expect(writer.create).toHaveBeenCalledTimes(1);
   });
 
+  it("creates exactly one row for 30 simultaneous identical errors", async () => {
+    const { writer, rows } = createFakeWriter();
+    const deduper = new ErrorLogDeduper();
+    const input = { source: "WORKER" as const, level: "ERROR" as const, message: QUOTA_MESSAGE };
+    // The worker runs 5 jobs concurrently and logs without awaiting, so
+    // identical failures arrive in the same tick: the first call reserves
+    // the signature synchronously, the rest must dedupe against it.
+    const outcomes = await Promise.all(
+      Array.from({ length: 30 }, () => deduper.record(input, writer))
+    );
+    expect(writer.create).toHaveBeenCalledTimes(1);
+    expect(rows).toHaveLength(1);
+    expect(outcomes.filter((o) => o === "logged")).toHaveLength(1);
+    expect(outcomes.filter((o) => o === "duplicate")).toHaveLength(29);
+  });
+
+  it("reserves the per-minute cap slot synchronously under concurrency", async () => {
+    const { writer } = createFakeWriter();
+    const deduper = new ErrorLogDeduper({ maxNewRowsPerMinute: 2 });
+    // Messages differ in non-numeric text (numbers are normalized away).
+    const outcomes = await Promise.all(
+      ["alpha", "beta", "gamma"].map((label) =>
+        deduper.record(
+          { source: "WORKER", level: "ERROR", message: `distinct failure ${label}` },
+          writer
+        )
+      )
+    );
+    expect(outcomes.filter((o) => o === "logged")).toHaveLength(2);
+    expect(outcomes.filter((o) => o === "suppressed")).toHaveLength(1);
+    expect(writer.create).toHaveBeenCalledTimes(2);
+  });
+
+  it("releases the reservation when the first create fails", async () => {
+    const { writer } = createFakeWriter();
+    const deduper = new ErrorLogDeduper();
+    const input = { source: "WORKER" as const, level: "ERROR" as const, message: QUOTA_MESSAGE };
+    vi.mocked(writer.create).mockRejectedValueOnce(new Error("DB down"));
+    await expect(deduper.record(input, writer)).rejects.toThrow("DB down");
+    // The phantom row is gone, so the retry logs normally.
+    expect(await deduper.record(input, writer)).toBe("logged");
+    expect(writer.create).toHaveBeenCalledTimes(2);
+  });
+
   it("evicts the oldest signature when the map is full", async () => {
     const { writer } = createFakeWriter();
     const deduper = new ErrorLogDeduper({ maxSignatures: 2 });

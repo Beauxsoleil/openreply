@@ -22,6 +22,8 @@ const RATE_LIMIT_WINDOW = 3600; // 1 hour in seconds
 const REQUEUE_DELAY_MS = 30 * 60 * 1000; // 30 minutes
 const MAX_REQUEUE_ATTEMPTS = 3;
 
+const REDIS_READY_TIMEOUT_MS = 3000; // matches the client connectTimeout
+
 let redis: Redis | null = null;
 
 function getRedis(): Redis {
@@ -37,8 +39,61 @@ function getRedis(): Redis {
       connectTimeout: 3000,
       retryStrategy: (times) => redisRetryDelayMs(times, 10_000),
     });
+    // ioredis emits "error" on connection failures, and Node throws when
+    // an "error" event has no listener. Same throttled listener as the
+    // shared connection in lib/queue/client.ts.
+    let lastErrorLogAt = 0;
+    redis.on("error", (err) => {
+      const now = Date.now();
+      if (now - lastErrorLogAt < 60_000) return;
+      lastErrorLogAt = now;
+      console.error("[RateLimiter] Redis connection error:", err.message);
+    });
   }
   return redis;
+}
+
+/**
+ * Wait until the Redis client is ready to accept commands.
+ *
+ * getRedis() builds the client lazily, and ioredis connects asynchronously:
+ * the first call right after worker start (or after a reconnect) issues its
+ * command while the client is still "connecting". With
+ * enableOfflineQueue:false that command is rejected outright, so the first
+ * DM batch failed even though Redis was healthy. Waiting for the "ready"
+ * event — bounded, so a dead Redis still fails fast instead of hanging —
+ * fixes that without re-enabling the offline queue.
+ */
+async function waitForRedisReady(client: Redis): Promise<void> {
+  if (client.status === "ready") return;
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error("Timed out waiting for Redis to become ready"));
+    }, REDIS_READY_TIMEOUT_MS);
+    const onReady = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const cleanup = () => {
+      clearTimeout(timer);
+      client.off("ready", onReady);
+      client.off("error", onError);
+    };
+    client.once("ready", onReady);
+    client.once("error", onError);
+  });
+}
+
+/** The shared lazy client, ready to accept commands. */
+async function getReadyRedis(): Promise<Redis> {
+  const client = getRedis();
+  await waitForRedisReady(client);
+  return client;
 }
 
 export interface RateLimitResult {
@@ -115,7 +170,7 @@ export async function checkRateLimit(
   instagramAccountId: string,
   requeueAttempt: number = 0
 ): Promise<RateLimitResult> {
-  const client = getRedis();
+  const client = await getReadyRedis();
   const key = `rate:dm:${instagramAccountId}`;
 
   const currentCount = await client.get(key);
@@ -167,7 +222,7 @@ export async function reserveDMSlot(
   instagramAccountId: string,
   requeueAttempt: number = 0
 ): Promise<RateLimitResult> {
-  const client = getRedis();
+  const client = await getReadyRedis();
   const key = `rate:dm:${instagramAccountId}`;
 
   const result = await client.eval(
@@ -215,7 +270,7 @@ export async function reserveDMSlot(
 export async function releaseDMSlot(
   instagramAccountId: string
 ): Promise<number> {
-  const client = getRedis();
+  const client = await getReadyRedis();
   const key = `rate:dm:${instagramAccountId}`;
   const next = await client.decr(key);
   if (next < 0) {
@@ -242,7 +297,7 @@ export async function incrementDMCounter(
 export async function getCurrentDMCount(
   instagramAccountId: string
 ): Promise<number> {
-  const client = getRedis();
+  const client = await getReadyRedis();
   const key = `rate:dm:${instagramAccountId}`;
   const count = await client.get(key);
   return count ? parseInt(count, 10) : 0;
@@ -254,7 +309,7 @@ export async function getCurrentDMCount(
 export async function resetRateLimit(
   instagramAccountId: string
 ): Promise<void> {
-  const client = getRedis();
+  const client = await getReadyRedis();
   const key = `rate:dm:${instagramAccountId}`;
   await client.del(key);
 }
